@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type RecurrenceInput, type Task, type TaskInput, type TaskList } from "../api";
 import {
-  addDays,
+  combineReminderOffset,
   formatDueFull,
   formatTimestamp,
   monthGrid,
   recurrenceLabel,
   reminderLabel,
+  splitReminderOffset,
   todayString,
   WEEKDAY_LABELS,
   weekdayIndex,
@@ -140,20 +141,13 @@ export function TaskDetails({
     setPop(pop?.kind === kind ? null : { kind, rect });
   };
 
-  const setDue = (date: string | null, time?: string | null) => {
-    if (!date) {
-      update({ dueDate: null, dueTime: null, reminderOffset: null, recurrence: null });
-    } else {
-      update({
-        dueDate: date,
-        dueTime: time ?? draft.dueTime ?? "09:00",
-        reminderOffset: draft.reminderOffset ?? 0,
-      });
-    }
+  const applyDue = (date: string, time: string) => {
+    // 仅更新到期日期与时间，不擅自改动提醒设置
+    update({ dueDate: date, dueTime: time });
     setPop(null);
   };
 
-  const setReminder = (offset: number | null) => {
+  const applyReminder = (offset: number | null) => {
     if (offset !== null && !draft.dueDate) {
       const today = todayString();
       update({ dueDate: today, dueTime: draft.dueTime ?? "09:00", reminderOffset: offset });
@@ -400,40 +394,20 @@ export function TaskDetails({
           <CalendarPanel
             date={draft.dueDate}
             time={draft.dueTime}
-            onPick={(date, time) => setDue(date, time)}
-            onClear={() => setDue(null)}
+            onConfirm={applyDue}
+            onCancel={() => setPop(null)}
           />
         </Popover>
       )}
 
       {pop?.kind === "reminder" && (
-        <Popover anchor={pop.rect} onClose={() => setPop(null)} width={220}>
-          {[
-            { label: "不提醒", value: null as number | null },
-            { label: "准时提醒", value: 0 },
-            { label: "提前 5 分钟", value: 5 },
-            { label: "提前 15 分钟", value: 15 },
-            { label: "提前 30 分钟", value: 30 },
-            { label: "提前 1 小时", value: 60 },
-            { label: "提前 2 小时", value: 120 },
-            { label: "提前 1 天", value: 1440 },
-            { label: "提前 2 天", value: 2880 },
-            { label: "提前 1 周", value: 10080 },
-          ].map((o) => (
-            <button
-              key={String(o.value)}
-              className={`menu-item ${draft.reminderOffset === o.value ? "selected" : ""}`}
-              onClick={() => setReminder(o.value)}
-            >
-              <span className="menu-icon"><IconBell size={14} /></span>
-              {o.label}
-            </button>
-          ))}
-          {!draft.dueDate && (
-            <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 10px" }}>
-              选择提醒会自动把到期日期设为今天 09:00
-            </div>
-          )}
+        <Popover anchor={pop.rect} onClose={() => setPop(null)} width={240}>
+          <ReminderPanel
+            current={draft.reminderOffset}
+            hasDue={Boolean(draft.dueDate)}
+            onApply={applyReminder}
+            onCancel={() => setPop(null)}
+          />
         </Popover>
       )}
 
@@ -468,21 +442,34 @@ export function TaskDetails({
   );
 }
 
+function clampInt(value: string, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
 function CalendarPanel({
   date,
   time,
-  onPick,
-  onClear,
+  onConfirm,
+  onCancel,
 }: {
   date: string | null;
   time: string | null;
-  onPick: (date: string, time: string | null) => void;
-  onClear: () => void;
+  onConfirm: (date: string, time: string) => void;
+  onCancel: () => void;
 }) {
   const base = date ?? todayString();
   const [year, setYear] = useState(Number(base.slice(0, 4)));
   const [month, setMonth] = useState(Number(base.slice(5, 7)) - 1);
-  const [timeValue, setTimeValue] = useState(time ?? "09:00");
+  const [selected, setSelected] = useState<string | null>(date);
+  const initialTime = time ?? "09:00";
+  const [hour, setHour] = useState(initialTime.slice(0, 2));
+  const [minute, setMinute] = useState(initialTime.slice(3, 5));
 
   const cells = monthGrid(year, month);
   const today = todayString();
@@ -492,6 +479,16 @@ function CalendarPanel({
     const d = new Date(year, m, 1);
     setYear(d.getFullYear());
     setMonth(d.getMonth());
+  };
+
+  const normalizeHour = () => setHour(pad2(clampInt(hour, 0, 23, 9)));
+  const normalizeMinute = () => setMinute(pad2(clampInt(minute, 0, 59, 0)));
+
+  const confirm = () => {
+    if (!selected) return;
+    const h = clampInt(hour, 0, 23, 9);
+    const m = clampInt(minute, 0, 59, 0);
+    onConfirm(selected, `${pad2(h)}:${pad2(m)}`);
   };
 
   return (
@@ -520,8 +517,8 @@ function CalendarPanel({
               key={c}
               className={`calendar-cell ${outside ? "outside" : ""} ${
                 c === today ? "today" : ""
-              } ${c === date ? "selected" : ""}`}
-              onClick={() => onPick(c, timeValue)}
+              } ${c === selected ? "selected" : ""}`}
+              onClick={() => setSelected(c)}
             >
               {Number(c.slice(8, 10))}
             </button>
@@ -530,28 +527,179 @@ function CalendarPanel({
       </div>
       <div className="time-row">
         <IconCalendar size={14} />
-        <span style={{ fontSize: 12, color: "var(--muted)" }}>时间</span>
-        <input
-          type="time"
-          value={timeValue}
-          onChange={(e) => setTimeValue(e.target.value)}
-          onBlur={() => date && onPick(date, timeValue)}
-        />
+        <span className="time-label">时间</span>
+        <div className="time-fields">
+          <input
+            className="time-input"
+            inputMode="numeric"
+            maxLength={2}
+            value={hour}
+            aria-label="小时"
+            onChange={(e) => setHour(e.target.value.replace(/\D/g, "").slice(0, 2))}
+            onBlur={normalizeHour}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirm();
+            }}
+          />
+          <span className="time-sep">:</span>
+          <input
+            className="time-input"
+            inputMode="numeric"
+            maxLength={2}
+            value={minute}
+            aria-label="分钟"
+            onChange={(e) => setMinute(e.target.value.replace(/\D/g, "").slice(0, 2))}
+            onBlur={normalizeMinute}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirm();
+            }}
+          />
+        </div>
       </div>
-      <div className="calendar-quick">
-        <button className="chip" onClick={() => onPick(todayString(), timeValue)}>
-          今天
+      <div className="calendar-actions">
+        <button className="btn small" onClick={onCancel}>
+          取消
         </button>
-        <button className="chip" onClick={() => onPick(addDays(todayString(), 1), timeValue)}>
-          明天
-        </button>
-        <button className="chip" onClick={() => onPick(addDays(todayString(), 7), timeValue)}>
-          下周
-        </button>
-        <button className="chip" onClick={onClear}>
-          清除日期
+        <button className="btn primary small" onClick={confirm} disabled={!selected}>
+          确认
         </button>
       </div>
+    </div>
+  );
+}
+
+const REMINDER_PRESETS: { label: string; value: number | null }[] = [
+  { label: "不提醒", value: null },
+  { label: "准时提醒", value: 0 },
+  { label: "提前 20 分钟", value: 20 },
+  { label: "提前 1 小时", value: 60 },
+  { label: "提前 1 天", value: 1440 },
+];
+
+function isPresetReminder(value: number | null): boolean {
+  return REMINDER_PRESETS.some((p) => p.value === value);
+}
+
+function ReminderPanel({
+  current,
+  hasDue,
+  onApply,
+  onCancel,
+}: {
+  current: number | null;
+  hasDue: boolean;
+  onApply: (offset: number | null) => void;
+  onCancel: () => void;
+}) {
+  const isCustom = current !== null && !isPresetReminder(current);
+  const [customOpen, setCustomOpen] = useState(isCustom);
+  const [pending, setPending] = useState<number | null>(current);
+  const init = splitReminderOffset(current ?? 0);
+  const [days, setDays] = useState(String(init.days));
+  const [hours, setHours] = useState(String(init.hours));
+  const [minutes, setMinutes] = useState(String(init.minutes));
+  const [error, setError] = useState("");
+
+  const confirm = () => {
+    if (!customOpen) {
+      onApply(pending);
+      return;
+    }
+    const d = clampInt(days, 0, 3650, 0);
+    const h = clampInt(hours, 0, 23, 0);
+    const m = clampInt(minutes, 0, 59, 0);
+    const total = combineReminderOffset(d, h, m);
+    if (total <= 0) {
+      setError("请输入有效的提前时间");
+      return;
+    }
+    setError("");
+    onApply(total);
+  };
+
+  return (
+    <div>
+      {REMINDER_PRESETS.map((o) => (
+        <button
+          key={String(o.value)}
+          className={`menu-item ${!customOpen && pending === o.value ? "selected" : ""}`}
+          onClick={() => {
+            setCustomOpen(false);
+            setPending(o.value);
+          }}
+        >
+          <span className="menu-icon">
+            <IconBell size={14} />
+          </span>
+          {o.label}
+        </button>
+      ))}
+      <button
+        className={`menu-item ${customOpen ? "selected" : ""}`}
+        onClick={() => setCustomOpen(true)}
+      >
+        <span className="menu-icon">
+          <IconBell size={14} />
+        </span>
+        {isCustom && customOpen ? reminderLabel(current) : "自定义"}
+      </button>
+
+      {customOpen && (
+        <div className="reminder-custom">
+          <div className="num-row">
+            <label>
+              <input
+                className="num-input"
+                inputMode="numeric"
+                maxLength={4}
+                value={days}
+                aria-label="提前天数"
+                onChange={(e) => setDays(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                onBlur={() => setDays(String(clampInt(days, 0, 3650, 0)))}
+              />
+              <span>天</span>
+            </label>
+            <label>
+              <input
+                className="num-input"
+                inputMode="numeric"
+                maxLength={2}
+                value={hours}
+                aria-label="提前小时"
+                onChange={(e) => setHours(e.target.value.replace(/\D/g, "").slice(0, 2))}
+                onBlur={() => setHours(String(clampInt(hours, 0, 23, 0)))}
+              />
+              <span>小时</span>
+            </label>
+            <label>
+              <input
+                className="num-input"
+                inputMode="numeric"
+                maxLength={2}
+                value={minutes}
+                aria-label="提前分钟"
+                onChange={(e) => setMinutes(e.target.value.replace(/\D/g, "").slice(0, 2))}
+                onBlur={() => setMinutes(String(clampInt(minutes, 0, 59, 0)))}
+              />
+              <span>分钟</span>
+            </label>
+          </div>
+          {error && <div className="form-error">{error}</div>}
+        </div>
+      )}
+
+      <div className="panel-actions">
+        <button className="btn small" onClick={onCancel}>
+          取消
+        </button>
+        <button className="btn primary small" onClick={confirm}>
+          确认
+        </button>
+      </div>
+
+      {!hasDue && (
+        <div className="panel-hint">未设置到期日期时，选择提醒会将日期设为今天 09:00</div>
+      )}
     </div>
   );
 }

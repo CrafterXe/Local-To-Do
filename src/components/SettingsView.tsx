@@ -56,6 +56,35 @@ export function SettingsView({
     }
   };
 
+  const chooseSound = async () => {
+    try {
+      const path = await open({
+        title: "选择提示音",
+        multiple: false,
+        filters: [{ name: "WAV 音频", extensions: ["wav"] }],
+      });
+      if (!path || Array.isArray(path)) return;
+      await api.previewSound(path);
+      await onUpdate({ soundPath: path });
+      notify("提示音已更新");
+    } catch (e) {
+      notify(`无法使用该提示音：${String(e)}`, true);
+    }
+  };
+
+  const previewSound = async () => {
+    try {
+      await api.previewSound(settings.soundPath);
+    } catch (e) {
+      notify(String(e), true);
+    }
+  };
+
+  const resetSound = async () => {
+    await onUpdate({ soundPath: null });
+    notify("已恢复默认提示音");
+  };
+
   const doBackup = async () => {
     setBusy(true);
     try {
@@ -134,11 +163,9 @@ export function SettingsView({
     <div className="settings-scroll">
       <section className="settings-section">
         <h2 className="settings-title">外观</h2>
-        <p className="settings-desc">默认使用深色主题，可切换为浅色主题。</p>
         <div className="setting-row">
           <div className="setting-text">
             <div className="setting-name">主题</div>
-            <div className="setting-hint">深色适合长时间使用，浅色在明亮环境下更清晰。</div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button
@@ -159,9 +186,6 @@ export function SettingsView({
 
       <section className="settings-section">
         <h2 className="settings-title">通知与提醒</h2>
-        <p className="settings-desc">
-          提醒由应用内的后台调度线程驱动，并使用 Windows 原生通知。关闭主窗口后应用仍在系统托盘中运行，提醒不会中断。
-        </p>
         <div className="setting-row">
           <div className="setting-text">
             <div className="setting-name">启用提醒通知</div>
@@ -177,8 +201,51 @@ export function SettingsView({
         </div>
         <div className="setting-row">
           <div className="setting-text">
+            <div className="setting-name">提示音</div>
+          </div>
+          <Switch
+            on={settings.soundEnabled}
+            onClick={() => void onUpdate({ soundEnabled: !settings.soundEnabled })}
+          />
+        </div>
+        <div className="setting-row">
+          <div className="setting-text">
+            <div className="setting-name">提示音文件</div>
+            <div className="setting-hint">
+              {settings.soundPath
+                ? settings.soundPath.split(/[\\/]/).pop()
+                : "默认系统提示音"}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              className="btn small"
+              disabled={!settings.soundEnabled}
+              onClick={() => void chooseSound()}
+            >
+              选择
+            </button>
+            <button
+              className="btn small"
+              disabled={!settings.soundEnabled}
+              onClick={() => void previewSound()}
+            >
+              试听
+            </button>
+            {settings.soundPath && (
+              <button
+                className="btn small"
+                disabled={!settings.soundEnabled}
+                onClick={() => void resetSound()}
+              >
+                恢复默认
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-text">
             <div className="setting-name">发送测试通知</div>
-            <div className="setting-hint">验证 Windows 通知权限是否正常。</div>
           </div>
           <button className="btn small" onClick={() => void testNotification()}>
             <IconBell size={14} />
@@ -192,9 +259,7 @@ export function SettingsView({
         <div className="setting-row">
           <div className="setting-text">
             <div className="setting-name">关闭窗口时最小化到系统托盘</div>
-            <div className="setting-hint">
-              开启后点击关闭按钮不会退出应用，提醒调度继续在后台运行；从托盘菜单「退出」才会真正结束程序。
-            </div>
+            <div className="setting-hint">关闭后仍在托盘运行，提醒不中断。</div>
           </div>
           <Switch
             on={settings.closeToTray}
@@ -204,14 +269,13 @@ export function SettingsView({
         <div className="setting-row">
           <div className="setting-text">
             <div className="setting-name">开机自动启动</div>
-            <div className="setting-hint">仅在您主动开启后写入系统启动项，可随时关闭。</div>
           </div>
           <Switch on={settings.autostart} onClick={() => void onUpdate({ autostart: !settings.autostart })} />
         </div>
         <div className="setting-row">
           <div className="setting-text">
             <div className="setting-name">开机启动时最小化到托盘</div>
-            <div className="setting-hint">需要先开启开机自动启动。开机后不弹出窗口，仅在托盘中运行。</div>
+            <div className="setting-hint">需先开启开机自动启动。</div>
           </div>
           <Switch
             on={settings.startMinimized}
@@ -222,9 +286,7 @@ export function SettingsView({
 
       <section className="settings-section">
         <h2 className="settings-title">数据与备份</h2>
-        <p className="settings-desc">
-          所有数据均保存在本机 SQLite 数据库中，完全离线，不上传任何信息。建议定期备份到其他磁盘。
-        </p>
+        <p className="settings-desc">数据保存在本机，不上传任何信息。</p>
 
         <div className="setting-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
           <div className="setting-text">
@@ -254,7 +316,7 @@ export function SettingsView({
           <div className="setting-text">
             <div className="setting-name">自动备份</div>
             <div className="setting-hint">
-              上次备份：{formatRelative(settings.lastBackupAt)}。备份以 JSON + 数据库快照形式保存在备份目录，最多保留 20 份。
+              上次备份：{formatRelative(settings.lastBackupAt)}（最多保留 20 份）
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -336,9 +398,9 @@ export function SettingsView({
       <section className="settings-section">
         <h2 className="settings-title">关于</h2>
         <p className="settings-desc">
-          Local To Do v{info?.version ?? "1.0.0"} · 本地优先的个人任务与备忘录管理软件。
+          Local To Do v{info?.version ?? "1.0.0"} · 本地优先，完全离线。
           <br />
-          不联网、不需要账号、不收集数据、无广告与遥测。所有数据归您所有。
+          不联网、无账号、无遥测，数据归您所有。
         </p>
       </section>
 

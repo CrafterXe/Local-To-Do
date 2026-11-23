@@ -103,14 +103,35 @@ export function monthGrid(year: number, month: number): string[] {
   return cells;
 }
 
-/** 根据 offset 生成提醒描述 */
+/** 根据 offset 生成提醒描述（精确到天/小时/分钟） */
 export function reminderLabel(offset: number | null): string {
   if (offset === null) return "不提醒";
   if (offset === 0) return "准时提醒";
-  if (offset < 60) return `提前 ${offset} 分钟`;
-  if (offset < 1440) return `提前 ${Math.round(offset / 60)} 小时`;
-  if (offset < 10080) return `提前 ${Math.round(offset / 1440)} 天`;
-  return `提前 ${Math.round(offset / 10080)} 周`;
+  const { days, hours, minutes } = splitReminderOffset(offset);
+  const parts: string[] = [];
+  if (days) parts.push(`${days} 天`);
+  if (hours) parts.push(`${hours} 小时`);
+  if (minutes) parts.push(`${minutes} 分钟`);
+  return `提前 ${parts.join(" ")}`;
+}
+
+/** 把分钟数拆成 天 / 小时 / 分钟 */
+export function splitReminderOffset(offset: number): {
+  days: number;
+  hours: number;
+  minutes: number;
+} {
+  const total = Math.max(0, Math.floor(offset));
+  return {
+    days: Math.floor(total / 1440),
+    hours: Math.floor((total % 1440) / 60),
+    minutes: total % 60,
+  };
+}
+
+/** 把 天 / 小时 / 分钟 合并成分钟数 */
+export function combineReminderOffset(days: number, hours: number, minutes: number): number {
+  return Math.max(0, days) * 1440 + Math.max(0, hours) * 60 + Math.max(0, minutes);
 }
 
 export function recurrenceLabel(rec: {

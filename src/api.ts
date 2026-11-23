@@ -48,6 +48,7 @@ export interface Task {
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
+  deletedAt: number | null;
   steps: TaskStep[];
   recurrence: Recurrence | null;
   listName: string;
@@ -62,9 +63,20 @@ export interface Note {
   updatedAt: number;
 }
 
+export interface DeletedList {
+  id: string;
+  name: string;
+  color: string;
+  sortOrder: number;
+  deletedAt: number | null;
+  taskCount: number;
+}
+
 export interface AppSettings {
   theme: string;
   notificationsEnabled: boolean;
+  soundEnabled: boolean;
+  soundPath: string | null;
   closeToTray: boolean;
   autostart: boolean;
   startMinimized: boolean;
@@ -171,6 +183,9 @@ export const api = {
   deleteList: (id: string, mode: "move" | "delete", targetListId?: string | null) =>
     invoke<void>("delete_list", { id, mode, targetListId: targetListId ?? null }),
   reorderLists: (ids: string[]) => invoke<void>("reorder_lists", { ids }),
+  listDeletedLists: () => invoke<DeletedList[]>("list_deleted_lists"),
+  restoreList: (id: string) => invoke<void>("restore_list", { id }),
+  purgeList: (id: string) => invoke<void>("purge_list", { id }),
 
   listTasks: (query: {
     view: string;
@@ -218,6 +233,7 @@ export const api = {
   getAppInfo: () => invoke<AppInfo>("get_app_info"),
   getDbStats: () => invoke<DbStats>("get_db_stats"),
   sendTestNotification: () => invoke<boolean>("send_test_notification"),
+  previewSound: (path: string | null) => invoke<void>("preview_sound", { path }),
   getNextReminder: () => invoke<number | null>("get_next_reminder"),
 
   createBackup: () => invoke<BackupEntry>("create_backup"),

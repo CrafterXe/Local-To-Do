@@ -364,6 +364,225 @@ fn due_reminders_returns_pending_once() {
 }
 
 #[test]
+fn migration_from_v1_adds_list_deleted_at() {
+    let dir = std::env::temp_dir().join(format!("local_todo_mig_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("old.db");
+    {
+        let db = Db::open(&path).unwrap();
+        let conn = db.lock();
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_lists_deleted;
+             ALTER TABLE lists DROP COLUMN deleted_at;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+    let db = Db::open(&path).unwrap();
+    let conn = db.lock();
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    assert_eq!(version, 2);
+    let has_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('lists') WHERE name='deleted_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_col, 1);
+    assert_eq!(repo::all_lists(&conn).unwrap().len(), 1);
+    drop(conn);
+    drop(db);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn deleted_list_is_restorable_with_its_tasks() {
+    let db = setup();
+    let conn = db.lock();
+    let extra = repo::create_list(&conn, "项目 A", "#00a884", "").unwrap();
+    let t1 = repo::create_task(
+        &conn,
+        &TaskInput {
+            list_id: Some(extra.id.clone()),
+            due_date: Some("2026-12-01".into()),
+            due_time: Some("09:00".into()),
+            reminder_offset: Some(0),
+            ..make_input(&conn, "任务一")
+        },
+    )
+    .unwrap();
+    let t2 = repo::create_task(
+        &conn,
+        &TaskInput {
+            list_id: Some(extra.id.clone()),
+            ..make_input(&conn, "任务二")
+        },
+    )
+    .unwrap();
+    repo::complete_task(&conn, &t2.id, true).unwrap();
+
+    repo::delete_list(&conn, &extra.id, "delete", None).unwrap();
+
+    // 清单进入最近删除，清单内任务不出现在任务的最近删除列表中
+    let deleted_lists = repo::deleted_lists(&conn).unwrap();
+    assert_eq!(deleted_lists.len(), 1);
+    assert_eq!(deleted_lists[0].name, "项目 A");
+    assert_eq!(deleted_lists[0].task_count, 2);
+    let deleted_tasks = repo::list_tasks(
+        &conn,
+        &TaskQuery {
+            view: "deleted".into(),
+            list_id: None,
+            search: None,
+            include_completed: None,
+        },
+    )
+    .unwrap();
+    assert!(deleted_tasks.is_empty());
+
+    // 恢复清单后，任务连同完成状态、提醒和时间一起恢复
+    repo::restore_list(&conn, &extra.id).unwrap();
+    assert!(repo::deleted_lists(&conn).unwrap().is_empty());
+    let restored = repo::get_task(&conn, &t1.id).unwrap();
+    assert_eq!(restored.list_id, extra.id);
+    assert_eq!(restored.due_date.as_deref(), Some("2026-12-01"));
+    assert!(restored.reminder_at.is_some());
+    assert_eq!(pending_count(&conn), 1);
+    let restored2 = repo::get_task(&conn, &t2.id).unwrap();
+    assert!(restored2.is_completed);
+}
+
+#[test]
+fn deleted_list_move_mode_keeps_tasks_active() {
+    let db = setup();
+    let conn = db.lock();
+    let extra = repo::create_list(&conn, "临时", "#e0a03a", "").unwrap();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            list_id: Some(extra.id.clone()),
+            ..make_input(&conn, "待办")
+        },
+    )
+    .unwrap();
+    repo::delete_list(&conn, &extra.id, "move", None).unwrap();
+
+    assert_eq!(repo::deleted_lists(&conn).unwrap().len(), 1);
+    let moved = repo::get_task(&conn, &task.id).unwrap();
+    assert_ne!(moved.list_id, extra.id);
+
+    repo::restore_list(&conn, &extra.id).unwrap();
+    assert_eq!(repo::all_lists(&conn).unwrap().len(), 2);
+    // 移动出去的任务不会被错误地“恢复”回来
+    assert_ne!(repo::get_task(&conn, &task.id).unwrap().list_id, extra.id);
+}
+
+#[test]
+fn purge_list_and_empty_deleted_clear_everything() {
+    let db = setup();
+    let conn = db.lock();
+    let extra = repo::create_list(&conn, "待清理", "#e05252", "").unwrap();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            list_id: Some(extra.id.clone()),
+            due_date: Some("2026-12-01".into()),
+            reminder_offset: Some(0),
+            ..make_input(&conn, "将被清除")
+        },
+    )
+    .unwrap();
+    let single = repo::create_task(&conn, &make_input(&conn, "单独删除")).unwrap();
+
+    repo::delete_list(&conn, &extra.id, "delete", None).unwrap();
+    repo::delete_task(&conn, &single.id, "single").unwrap();
+    assert_eq!(pending_count(&conn), 0);
+
+    repo::purge_list(&conn, &extra.id).unwrap();
+    assert!(repo::deleted_lists(&conn).unwrap().is_empty());
+    assert!(repo::get_task(&conn, &task.id).is_err());
+    assert_eq!(repo::deleted_count(&conn).unwrap(), 1);
+
+    repo::empty_deleted(&conn).unwrap();
+    assert_eq!(repo::deleted_count(&conn).unwrap(), 0);
+    assert!(repo::get_task(&conn, &single.id).is_err());
+}
+
+#[test]
+fn custom_reminder_offset_recomputes_after_due_change() {
+    let db = setup();
+    let conn = db.lock();
+    // 自定义：提前 1 天 3 小时 15 分钟 = 1635 分钟
+    let offset = 1 * 1440 + 3 * 60 + 15;
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-10".into()),
+            due_time: Some("18:00".into()),
+            reminder_offset: Some(offset),
+            ..make_input(&conn, "自定义提醒")
+        },
+    )
+    .unwrap();
+    let due = domain::compute_reminder_at(Some("2026-12-10"), Some("18:00"), Some(0)).unwrap();
+    assert_eq!(task.reminder_at, Some(due - offset * 60_000));
+
+    let updated = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-20".into()),
+            due_time: Some("18:00".into()),
+            reminder_offset: Some(offset),
+            ..make_input(&conn, "自定义提醒")
+        },
+    )
+    .unwrap();
+    let due2 = domain::compute_reminder_at(Some("2026-12-20"), Some("18:00"), Some(0)).unwrap();
+    assert_eq!(updated.reminder_at, Some(due2 - offset * 60_000));
+    assert_eq!(pending_count(&conn), 1);
+}
+
+#[test]
+fn sound_settings_roundtrip() {
+    let db = setup();
+    let conn = db.lock();
+    let mut settings = crate::db::load_settings(&conn).unwrap();
+    assert!(settings.sound_enabled);
+    assert!(settings.sound_path.is_none());
+
+    settings.sound_enabled = false;
+    settings.sound_path = Some("C:\\sounds\\ding.wav".into());
+    crate::db::save_settings(&conn, &settings).unwrap();
+
+    let loaded = crate::db::load_settings(&conn).unwrap();
+    assert!(!loaded.sound_enabled);
+    assert_eq!(loaded.sound_path.as_deref(), Some("C:\\sounds\\ding.wav"));
+}
+
+#[test]
+fn deleting_task_records_deleted_at_for_recent_view() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(&conn, &make_input(&conn, "删除时间")).unwrap();
+    repo::delete_task(&conn, &task.id, "single").unwrap();
+    let deleted = repo::list_tasks(
+        &conn,
+        &TaskQuery {
+            view: "deleted".into(),
+            list_id: None,
+            search: None,
+            include_completed: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(deleted.len(), 1);
+    assert!(deleted[0].deleted_at.is_some());
+    assert_eq!(repo::deleted_count(&conn).unwrap(), 1);
+}
+
+#[test]
 fn fired_reminder_is_not_recreated_after_task_update() {
     let db = setup();
     let conn = db.lock();

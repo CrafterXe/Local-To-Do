@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Task, View } from "../api";
+import type { DeletedList, Task, View } from "../api";
 import { formatDueLabel, formatTimestamp, todayString } from "../utils/date";
 import { IconCheck, IconNote, IconPlus, IconRepeat, IconStar, IconTrash, IconUpload } from "./Icons";
 import { EmptyState } from "./EmptyState";
@@ -7,6 +7,7 @@ import { EmptyState } from "./EmptyState";
 interface Props {
   tasks: Task[];
   view: View;
+  deletedLists?: DeletedList[];
   selectedId: string | null;
   searchActive: boolean;
   showListTag: boolean;
@@ -17,11 +18,15 @@ interface Props {
   onQuickAdd: (title: string) => void | Promise<void>;
   onRestore?: (task: Task) => void;
   onPurge?: (task: Task) => void;
+  onRestoreList?: (list: DeletedList) => void;
+  onPurgeList?: (list: DeletedList) => void;
+  onEmptyDeleted?: () => void;
 }
 
 export function TaskList({
   tasks,
   view,
+  deletedLists = [],
   selectedId,
   searchActive,
   showListTag,
@@ -32,6 +37,9 @@ export function TaskList({
   onQuickAdd,
   onRestore,
   onPurge,
+  onRestoreList,
+  onPurgeList,
+  onEmptyDeleted,
 }: Props) {
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -77,7 +85,54 @@ export function TaskList({
         </div>
       )}
 
-      {tasks.length === 0 ? (
+      {view.kind === "deleted" && (deletedLists.length > 0 || tasks.length > 0) && (
+        <div className="deleted-toolbar">
+          <span className="deleted-toolbar-title">最近删除</span>
+          <button className="text-btn danger" onClick={() => onEmptyDeleted?.()}>
+            清空
+          </button>
+        </div>
+      )}
+
+      {deletedLists.map((l) => (
+        <div key={l.id} className="task-row deleted-list-row">
+          <span className="nav-icon" style={{ marginLeft: 4 }}>
+            <span className="dot" style={{ background: l.color }} />
+          </span>
+          <div className="task-body">
+            <div className="task-title">{l.name}</div>
+            <div className="task-meta">
+              <span className="meta-item">清单</span>
+              <span className="meta-item">{l.taskCount} 个任务</span>
+              {l.deletedAt && (
+                <span className="meta-item">删除于 {formatTimestamp(l.deletedAt)}</span>
+              )}
+            </div>
+          </div>
+          <div className="task-side">
+            <button
+              className="icon-btn"
+              title="恢复清单"
+              onClick={() => onRestoreList?.(l)}
+            >
+              <IconUpload size={15} />
+            </button>
+            <button
+              className="icon-btn"
+              title="永久删除清单"
+              onClick={() => onPurgeList?.(l)}
+            >
+              <IconTrash size={15} />
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {view.kind === "deleted" && deletedLists.length > 0 && tasks.length > 0 && (
+        <div className="deleted-subtitle">已删除任务</div>
+      )}
+
+      {tasks.length === 0 && deletedLists.length === 0 ? (
         <EmptyState
           text={
             searchActive
@@ -103,18 +158,24 @@ export function TaskList({
               className={`task-row ${t.isCompleted ? "completed" : ""} ${
                 selectedId === t.id ? "selected" : ""
               }`}
-              onClick={() => onSelect(t.id)}
+              onClick={() => {
+                if (view.kind !== "deleted") onSelect(t.id);
+              }}
             >
-              <button
-                className={`check ${t.isCompleted ? "checked" : ""}`}
-                title={t.isCompleted ? "恢复为未完成" : "标记完成"}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleComplete(t);
-                }}
-              >
-                <IconCheck size={12} />
-              </button>
+              {view.kind === "deleted" ? (
+                <span className="check-spacer" />
+              ) : (
+                <button
+                  className={`check ${t.isCompleted ? "checked" : ""}`}
+                  title={t.isCompleted ? "恢复为未完成" : "标记完成"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleComplete(t);
+                  }}
+                >
+                  <IconCheck size={12} />
+                </button>
+              )}
 
               <div className="task-body">
                 <div className="task-title">{t.title}</div>
@@ -146,6 +207,9 @@ export function TaskList({
                   )}
                   {t.isCompleted && t.completedAt && (
                     <span className="meta-item">完成于 {formatTimestamp(t.completedAt)}</span>
+                  )}
+                  {view.kind === "deleted" && t.deletedAt && (
+                    <span className="meta-item">删除于 {formatTimestamp(t.deletedAt)}</span>
                   )}
                   {showListTag && t.listName && <span className="list-tag">{t.listName}</span>}
                 </div>

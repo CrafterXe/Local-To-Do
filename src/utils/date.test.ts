@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addDays,
+  combineReminderOffset,
   defaultReminderOffset,
   diffDays,
   formatDueLabel,
@@ -9,6 +10,7 @@ import {
   parseDateString,
   recurrenceLabel,
   reminderLabel,
+  splitReminderOffset,
   toDateString,
   weekdayIndex,
 } from "./date";
@@ -74,6 +76,26 @@ describe("提醒与重复描述", () => {
     expect(reminderLabel(30)).toBe("提前 30 分钟");
     expect(reminderLabel(120)).toBe("提前 2 小时");
     expect(reminderLabel(2880)).toBe("提前 2 天");
+    expect(reminderLabel(90)).toBe("提前 1 小时 30 分钟");
+    expect(reminderLabel(1635)).toBe("提前 1 天 3 小时 15 分钟");
+  });
+
+  it("自定义提醒的天/时/分拆分与合并", () => {
+    expect(splitReminderOffset(1635)).toEqual({ days: 1, hours: 3, minutes: 15 });
+    expect(splitReminderOffset(0)).toEqual({ days: 0, hours: 0, minutes: 0 });
+    expect(combineReminderOffset(0, 0, 30)).toBe(30);
+    expect(combineReminderOffset(0, 2, 0)).toBe(120);
+    expect(combineReminderOffset(1, 3, 15)).toBe(1635);
+    expect(combineReminderOffset(7, 0, 0)).toBe(10080);
+    expect(combineReminderOffset(-1, -2, -3)).toBe(0);
+  });
+
+  it("跨月、跨年与闰年的日历单元格", () => {
+    const dec = monthGrid(2026, 11);
+    expect(dec).toContain("2026-12-31");
+    expect(dec).toContain("2027-01-01");
+    const feb = monthGrid(2024, 1);
+    expect(feb).toContain("2024-02-29");
   });
 
   it("recurrenceLabel 输出中文规则", () => {

@@ -99,9 +99,10 @@ fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
     if due.is_empty() {
         return Ok(());
     }
-    let notifications_enabled = {
+    let (notifications_enabled, sound_enabled, sound_path) = {
         let conn = state.db.lock();
-        db::load_settings(&conn)?.notifications_enabled
+        let s = db::load_settings(&conn)?;
+        (s.notifications_enabled, s.sound_enabled, s.sound_path)
     };
 
     for r in due {
@@ -146,6 +147,12 @@ fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
             let ok = send_notification(app, &r.title, &body);
             if ok {
                 logging::info(format!("已发送提醒通知: {} @ {}", r.title, domain::format_trigger(r.trigger_at)));
+            }
+            // 应用自身播放提示音：不依赖 toast 的自定义声音能力
+            if sound_enabled {
+                if let Err(e) = crate::sound::play(sound_path.as_deref()) {
+                    logging::warn(format!("提示音播放失败: {e}"));
+                }
             }
         } else {
             logging::info(format!("通知已关闭，跳过发送: {}", r.title));

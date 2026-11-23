@@ -65,7 +65,8 @@ const TASK_SELECT: &str = "SELECT t.id, t.list_id, t.title, t.note, t.is_importa
     t.completed_at, t.due_date, t.due_time, t.reminder_offset, t.reminder_at, t.recurrence_id,
     t.series_id, t.parent_task_id, t.my_day, t.sort_order, t.created_at, t.updated_at,
     IFNULL(l.name, '任务'), IFNULL(l.color, '#2f6fed'),
-    r.kind, r.interval, r.weekdays, r.month_day, r.base_date, r.created_at
+    r.kind, r.interval, r.weekdays, r.month_day, r.base_date, r.created_at,
+    t.deleted_at
   FROM tasks t
   LEFT JOIN lists l ON l.id = t.list_id
   LEFT JOIN recurrences r ON r.id = t.recurrence_id";
@@ -107,6 +108,7 @@ fn map_task(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         sort_order: r.get(15)?,
         created_at: r.get(16)?,
         updated_at: r.get(17)?,
+        deleted_at: r.get(26)?,
         list_name: r.get(18)?,
         list_color: r.get(19)?,
         steps: Vec::new(),
@@ -151,6 +153,8 @@ pub fn list_tasks(conn: &Connection, q: &TaskQuery) -> AppResult<Vec<Task>> {
 
     if q.view == "deleted" {
         conds.push("t.deleted_at IS NOT NULL".into());
+        // 随清单一起删除的任务只在清单条目中展示，避免重复恢复
+        conds.push("l.deleted_at IS NULL".into());
     } else {
         conds.push("t.deleted_at IS NULL".into());
         match q.view.as_str() {
@@ -190,7 +194,12 @@ pub fn list_tasks(conn: &Connection, q: &TaskQuery) -> AppResult<Vec<Task>> {
     }
 
     let sql = format!("{TASK_SELECT} WHERE {}", conds.join(" AND "));
-    let sql = format!("{sql}{TASK_ORDER}");
+    let order = if q.view == "deleted" {
+        " ORDER BY t.deleted_at DESC"
+    } else {
+        TASK_ORDER
+    };
+    let sql = format!("{sql}{order}");
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(vals.iter()), map_task)?;
     let mut tasks = rows.collect::<Result<Vec<_>, _>>()?;
@@ -216,20 +225,32 @@ pub fn get_task(conn: &Connection, id: &str) -> AppResult<Task> {
 
 fn resolve_list(conn: &Connection, list_id: Option<&str>) -> AppResult<String> {
     if let Some(id) = list_id {
-        let exists: i64 = conn.query_row("SELECT COUNT(*) FROM lists WHERE id=?1", [id], |r| r.get(0))?;
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM lists WHERE id=?1 AND deleted_at IS NULL",
+            [id],
+            |r| r.get(0),
+        )?;
         if exists > 0 {
             return Ok(id.to_string());
         }
     }
     let settings = crate::db::load_settings(conn)?;
     if let Some(id) = settings.default_list_id {
-        let exists: i64 = conn.query_row("SELECT COUNT(*) FROM lists WHERE id=?1", [&id], |r| r.get(0))?;
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM lists WHERE id=?1 AND deleted_at IS NULL",
+            [&id],
+            |r| r.get(0),
+        )?;
         if exists > 0 {
             return Ok(id);
         }
     }
     let first: Option<String> = conn
-        .query_row("SELECT id FROM lists ORDER BY sort_order LIMIT 1", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM lists WHERE deleted_at IS NULL ORDER BY sort_order LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
         .ok();
     first.ok_or_else(|| crate::error::AppError::Other("没有可用清单".into()))
 }
@@ -418,7 +439,11 @@ pub fn set_my_day(conn: &Connection, id: &str, add: bool) -> AppResult<Task> {
 }
 
 pub fn move_task(conn: &Connection, id: &str, list_id: &str) -> AppResult<Task> {
-    let exists: i64 = conn.query_row("SELECT COUNT(*) FROM lists WHERE id=?1", [list_id], |r| r.get(0))?;
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM lists WHERE id=?1 AND deleted_at IS NULL",
+        [list_id],
+        |r| r.get(0),
+    )?;
     if exists == 0 {
         return err("目标清单不存在");
     }
@@ -663,8 +688,25 @@ pub fn purge_task(conn: &Connection, id: &str) -> AppResult<()> {
 }
 
 pub fn empty_deleted(conn: &Connection) -> AppResult<()> {
+    conn.execute(
+        "UPDATE reminder_schedules SET status='cancelled'
+         WHERE task_id IN (SELECT id FROM tasks WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
     conn.execute("DELETE FROM tasks WHERE deleted_at IS NOT NULL", [])?;
+    // 已删除清单（其中的任务已在上一步清除）
+    conn.execute("DELETE FROM lists WHERE deleted_at IS NOT NULL", [])?;
     Ok(())
+}
+
+pub fn deleted_count(conn: &Connection) -> AppResult<i64> {
+    Ok(conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM tasks t WHERE t.deleted_at IS NOT NULL
+                    AND (t.list_id IS NULL OR t.list_id NOT IN (SELECT id FROM lists WHERE deleted_at IS NOT NULL)))
+                + (SELECT COUNT(*) FROM lists WHERE deleted_at IS NOT NULL)",
+        [],
+        |r| r.get(0),
+    )?)
 }
 
 pub fn sidebar_counts(conn: &Connection) -> AppResult<SidebarCounts> {
@@ -693,10 +735,7 @@ pub fn sidebar_counts(conn: &Connection) -> AppResult<SidebarCounts> {
             "SELECT COUNT(*) FROM tasks WHERE deleted_at IS NULL AND is_completed=1",
             &[],
         )?,
-        deleted: count(
-            "SELECT COUNT(*) FROM tasks WHERE deleted_at IS NOT NULL",
-            &[],
-        )?,
+        deleted: deleted_count(conn)?,
         notes: count("SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL", &[])?,
     })
 }

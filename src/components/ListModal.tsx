@@ -44,7 +44,7 @@ export function ListModal({ list, lists, onClose, onDone, notify }: Props) {
     try {
       const others = lists.filter((l) => l.id !== list.id);
       await api.deleteList(list.id, mode, others[0]?.id ?? null);
-      onDone(mode === "move" ? "清单已删除，任务已移动" : "清单及其任务已删除");
+      onDone(mode === "move" ? "清单已移入最近删除，任务已移动到其他清单" : "清单及其任务已移入最近删除");
       onClose();
     } catch (e) {
       notify(String(e), true);

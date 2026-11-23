@@ -223,6 +223,7 @@ select {
   align-items: center;
   gap: 10px;
   width: 100%;
+  box-sizing: border-box;
   padding: 7px 10px;
   border-radius: 7px;
   color: var(--text);
@@ -230,6 +231,8 @@ select {
   position: relative;
   border: 1px solid transparent;
   transition: background 0.12s;
+  cursor: pointer;
+  user-select: none;
 }
 
 .nav-item:hover {
@@ -271,6 +274,33 @@ select {
   height: 10px;
   border-radius: 50%;
   flex: 0 0 10px;
+}
+
+.list-row {
+  position: relative;
+}
+.list-row.dragging {
+  opacity: 0.4;
+}
+.list-row.dragging .nav-item {
+  cursor: grabbing;
+}
+.list-row.drag-before::before,
+.list-row.drag-after::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  z-index: 2;
+}
+.list-row.drag-before::before {
+  top: -1px;
+}
+.list-row.drag-after::after {
+  bottom: -1px;
 }
 
 .sidebar-footer {
@@ -439,6 +469,34 @@ select {
   background: var(--active);
 }
 
+.deleted-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px 4px;
+}
+.deleted-toolbar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+}
+.deleted-subtitle {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 10px 10px 2px;
+}
+.deleted-list-row {
+  align-items: center;
+  cursor: default;
+}
+.deleted-list-row .nav-icon {
+  color: var(--muted);
+  flex: 0 0 18px;
+  display: flex;
+  justify-content: center;
+}
+
 .task-row.completed .task-title {
   color: var(--muted);
   text-decoration: line-through;
@@ -456,6 +514,11 @@ select {
   justify-content: center;
   color: transparent;
   transition: all 0.14s;
+}
+.check-spacer {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
 }
 
 .check:hover {
@@ -923,13 +986,87 @@ select {
   gap: 8px;
   padding: 8px 6px 4px;
 }
-.time-row input[type="time"] {
+.time-label {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+}
+.time-fields {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   background: var(--panel-alt);
   border: 1px solid var(--border-soft);
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: 3px 6px;
+}
+.time-input,
+.num-input {
+  width: 34px;
+  background: transparent;
+  border: none;
   outline: none;
   color: var(--text);
+  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 0;
+  border-radius: 4px;
+}
+.time-input:focus,
+.num-input:focus {
+  background: var(--hover);
+}
+.time-sep {
+  color: var(--muted-2);
+  font-size: 13px;
+}
+.calendar-actions,
+.panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 6px 2px;
+  border-top: 1px solid var(--border-soft);
+  margin-top: 6px;
+}
+.panel-actions {
+  margin-top: 8px;
+  padding: 8px 0 0;
+}
+.reminder-custom {
+  padding: 6px 4px 2px;
+}
+.num-row {
+  display: flex;
+  gap: 8px;
+}
+.num-row label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  justify-content: center;
+  background: var(--panel-alt);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 4px 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.num-row .num-input {
+  width: 30px;
+}
+.form-error {
+  font-size: 11.5px;
+  color: #ff6b6b;
+  padding: 6px 4px 0;
+}
+.panel-hint {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 6px 8px 2px;
+  line-height: 1.5;
 }
 
 /* 通用表单 */

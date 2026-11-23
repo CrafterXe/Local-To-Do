@@ -6,6 +6,7 @@ import {
   type AppSettings,
   type BackupEntry,
   type DbStats,
+  type DeletedList,
   type HistoryEntry,
   type Note,
   type SidebarCounts,
@@ -29,6 +30,8 @@ type ModalState =
   | { type: "list"; list?: TaskListModel }
   | { type: "deleteTask"; task: Task }
   | { type: "purgeTask"; task: Task }
+  | { type: "purgeList"; list: DeletedList }
+  | { type: "emptyDeleted" }
   | { type: "deleteNote"; note: Note }
   | null;
 
@@ -48,6 +51,7 @@ export default function App() {
 
   const [view, setView] = useState<View>({ kind: "myDay" });
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [deletedLists, setDeletedLists] = useState<DeletedList[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -148,6 +152,21 @@ export default function App() {
       cancelled = true;
     };
   }, [view, search, tick, booted, notify]);
+
+  // 最近删除中的清单加载
+  useEffect(() => {
+    if (!booted || view.kind !== "deleted") return;
+    let cancelled = false;
+    api
+      .listDeletedLists()
+      .then((data) => {
+        if (!cancelled) setDeletedLists(data);
+      })
+      .catch((e) => notify(String(e), true));
+    return () => {
+      cancelled = true;
+    };
+  }, [view, tick, booted, notify]);
 
   // 笔记加载
   useEffect(() => {
@@ -369,15 +388,50 @@ export default function App() {
     }
   };
 
+  const reorderLists = async (ids: string[]) => {
+    const byId = new Map(lists.map((l) => [l.id, l]));
+    setLists(ids.map((id) => byId.get(id)!).filter(Boolean));
+    try {
+      await api.reorderLists(ids);
+    } catch (e) {
+      notify(String(e), true);
+      await refreshMeta();
+    }
+  };
+
+  const restoreList = async (list: DeletedList) => {
+    try {
+      await api.restoreList(list.id);
+      bump();
+      await refreshMeta();
+      notify(`清单「${list.name}」已恢复`);
+    } catch (e) {
+      notify(String(e), true);
+    }
+  };
+
+  // 当前清单被删除或已不存在时，回到「全部任务」
+  useEffect(() => {
+    if (!booted || lists.length === 0) return;
+    if (view.kind === "list" && view.listId && !lists.some((l) => l.id === view.listId)) {
+      setView({ kind: "all" });
+      setSelectedId(null);
+      setSelectedTask(null);
+    }
+  }, [lists, view, booted]);
+
   const subtitle = useMemo(() => {
     if (view.kind === "settings") return "提醒、备份与系统集成";
     if (view.kind === "notes") return `${notes.length} 条笔记 · 自动保存`;
     if (view.kind === "history") return "最近 300 条任务操作记录";
     if (search.trim()) return `搜索「${search.trim()}」· ${tasks.length} 个结果`;
     if (view.kind === "completed") return `${tasks.length} 个已完成任务`;
-    if (view.kind === "deleted") return `${tasks.length} 个已删除任务 · 可恢复`;
+    if (view.kind === "deleted")
+      return deletedLists.length
+        ? `${tasks.length} 个已删除任务 · ${deletedLists.length} 个已删除清单 · 可恢复`
+        : `${tasks.length} 个已删除任务 · 可恢复`;
     return `${tasks.length} 个任务`;
-  }, [view, notes.length, tasks.length, search]);
+  }, [view, notes.length, tasks.length, search, deletedLists.length]);
 
   if (!booted)
     return (
@@ -411,6 +465,7 @@ export default function App() {
         onSelect={selectView}
         onCreateList={() => setModal({ type: "list" })}
         onManageList={(l) => setModal({ type: "list", list: l })}
+        onReorderLists={(ids) => void reorderLists(ids)}
       />
 
       <main className="main">
@@ -498,6 +553,7 @@ export default function App() {
           <TaskList
             tasks={tasks}
             view={view}
+            deletedLists={deletedLists}
             selectedId={selectedId}
             searchActive={!!search.trim()}
             showListTag={view.kind !== "list"}
@@ -519,6 +575,9 @@ export default function App() {
               })();
             }}
             onPurge={(t) => setModal({ type: "purgeTask", task: t })}
+            onRestoreList={(l) => void restoreList(l)}
+            onPurgeList={(l) => setModal({ type: "purgeList", list: l })}
+            onEmptyDeleted={() => setModal({ type: "emptyDeleted" })}
           />
         )}
       </main>
@@ -607,6 +666,50 @@ export default function App() {
                 bump();
                 await refreshMeta();
                 notify("任务已永久删除");
+              },
+            },
+          ]}
+        />
+      )}
+
+      {modal?.type === "purgeList" && (
+        <ConfirmModal
+          title="永久删除清单"
+          message={`清单「${modal.list.name}」${modal.list.taskCount ? `及其中的 ${modal.list.taskCount} 个任务` : ""}将被永久删除，无法恢复。确定继续吗？`}
+          onClose={() => setModal(null)}
+          actions={[
+            { label: "取消", kind: "default", onClick: () => setModal(null) },
+            {
+              label: "永久删除",
+              kind: "danger",
+              onClick: async () => {
+                await api.purgeList(modal.list.id);
+                setModal(null);
+                bump();
+                await refreshMeta();
+                notify("清单已永久删除");
+              },
+            },
+          ]}
+        />
+      )}
+
+      {modal?.type === "emptyDeleted" && (
+        <ConfirmModal
+          title="清空最近删除"
+          message="最近删除中的所有任务与清单将被永久删除，无法恢复。确定继续吗？"
+          onClose={() => setModal(null)}
+          actions={[
+            { label: "取消", kind: "default", onClick: () => setModal(null) },
+            {
+              label: "永久删除",
+              kind: "danger",
+              onClick: async () => {
+                await api.emptyDeleted();
+                setModal(null);
+                bump();
+                await refreshMeta();
+                notify("最近删除已清空");
               },
             },
           ]}

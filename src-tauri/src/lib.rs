@@ -7,6 +7,7 @@ mod logging;
 mod models;
 mod repo;
 mod scheduler;
+mod sound;
 mod state;
 
 #[cfg(test)]
@@ -116,6 +117,9 @@ pub fn run() {
             commands::update_list,
             commands::delete_list,
             commands::reorder_lists,
+            commands::list_deleted_lists,
+            commands::restore_list,
+            commands::purge_list,
             commands::list_tasks,
             commands::get_task,
             commands::create_task,
@@ -146,6 +150,7 @@ pub fn run() {
             commands::get_app_info,
             commands::get_db_stats,
             commands::send_test_notification,
+            commands::preview_sound,
             commands::get_next_reminder,
             commands::create_backup,
             commands::list_backups,

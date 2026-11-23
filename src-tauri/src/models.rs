@@ -77,6 +77,8 @@ pub struct Task {
     pub sort_order: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 软删除时间（最近删除）
+    pub deleted_at: Option<i64>,
     pub steps: Vec<TaskStep>,
     pub recurrence: Option<Recurrence>,
     pub list_name: String,
@@ -117,12 +119,27 @@ pub struct HistoryEntry {
     pub at: i64,
 }
 
+/// 最近删除中的清单
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedList {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub sort_order: i64,
+    pub deleted_at: Option<i64>,
+    pub task_count: i64,
+}
+
 /// 应用设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: String,
     pub notifications_enabled: bool,
+    pub sound_enabled: bool,
+    /// 自定义提示音文件路径（仅支持 WAV），为空表示使用默认系统提示音
+    pub sound_path: Option<String>,
     pub close_to_tray: bool,
     pub autostart: bool,
     pub start_minimized: bool,
@@ -137,6 +154,8 @@ impl Default for AppSettings {
         Self {
             theme: "dark".into(),
             notifications_enabled: true,
+            sound_enabled: true,
+            sound_path: None,
             close_to_tray: true,
             autostart: false,
             start_minimized: false,

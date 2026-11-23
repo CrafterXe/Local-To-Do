@@ -57,22 +57,21 @@ impl Db {
     }
 }
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 fn migrate(conn: &Connection) -> AppResult<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= SCHEMA_VERSION {
-        return Ok(());
-    }
-    conn.execute_batch(
-        r#"
+    if version < 1 {
+        conn.execute_batch(
+            r#"
         CREATE TABLE IF NOT EXISTS lists (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             color TEXT NOT NULL DEFAULT '#2f6fed',
             icon TEXT NOT NULL DEFAULT '',
             sort_order INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            deleted_at INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS recurrences (
@@ -153,14 +152,35 @@ fn migrate(conn: &Connection) -> AppResult<()> {
             value TEXT NOT NULL
         );
         "#,
-    )?;
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        )?;
+    }
+    if version < 2 {
+        // v2：清单支持软删除（最近删除），保留清单中的任务与归属关系
+        let has_column: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('lists') WHERE name = 'deleted_at'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_column == 0 {
+            conn.execute_batch(
+                "ALTER TABLE lists ADD COLUMN deleted_at INTEGER;
+                 CREATE INDEX IF NOT EXISTS idx_lists_deleted ON lists(deleted_at);",
+            )?;
+        }
+    }
+    if version < SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
     Ok(())
 }
 
 fn seed(conn: &Connection) -> AppResult<()> {
     let now = crate::domain::local_now_ms();
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM lists", [], |r| r.get(0))?;
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM lists WHERE deleted_at IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
     if count == 0 {
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
@@ -208,6 +228,8 @@ pub fn save_settings(conn: &Connection, s: &AppSettings) -> AppResult<()> {
     let pairs: Vec<(&str, String)> = vec![
         ("theme", s.theme.clone()),
         ("notifications_enabled", bool_str(s.notifications_enabled)),
+        ("sound_enabled", bool_str(s.sound_enabled)),
+        ("sound_path", s.sound_path.clone().unwrap_or_default()),
         ("close_to_tray", bool_str(s.close_to_tray)),
         ("autostart", bool_str(s.autostart)),
         ("start_minimized", bool_str(s.start_minimized)),
@@ -253,6 +275,10 @@ pub fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
         match k.as_str() {
             "theme" => s.theme = if v == "light" { "light".into() } else { "dark".into() },
             "notifications_enabled" => s.notifications_enabled = v == "1",
+            "sound_enabled" => s.sound_enabled = v == "1",
+            "sound_path" => {
+                s.sound_path = if v.trim().is_empty() { None } else { Some(v) }
+            }
             "close_to_tray" => s.close_to_tray = v == "1",
             "autostart" => s.autostart = v == "1",
             "start_minimized" => s.start_minimized = v == "1",

@@ -6,7 +6,7 @@ use crate::backup::{self, RestoreReport};
 use crate::db::{self, DbStats};
 use crate::error::{err, AppResult};
 use crate::models::{
-    AppInfo, AppSettings, BackupEntry, HistoryEntry, Note, Task, TaskList, TaskQuery,
+    AppInfo, AppSettings, BackupEntry, DeletedList, HistoryEntry, Note, Task, TaskList, TaskQuery,
 };
 use crate::repo;
 use crate::repo::tasks::{SidebarCounts, TaskInput};
@@ -66,6 +66,27 @@ pub fn delete_list(
 pub fn reorder_lists(state: State<'_, Arc<AppState>>, ids: Vec<String>) -> AppResult<()> {
     let conn = state.db.lock();
     repo::reorder_lists(&conn, &ids)
+}
+
+#[tauri::command]
+pub fn list_deleted_lists(state: State<'_, Arc<AppState>>) -> AppResult<Vec<DeletedList>> {
+    let conn = state.db.lock();
+    repo::deleted_lists(&conn)
+}
+
+#[tauri::command]
+pub fn restore_list(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
+    let conn = state.db.lock();
+    let result = repo::restore_list(&conn, &id);
+    drop(conn);
+    state.notify_scheduler();
+    result
+}
+
+#[tauri::command]
+pub fn purge_list(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
+    let conn = state.db.lock();
+    repo::purge_list(&conn, &id)
 }
 
 // ---------------- 任务 ----------------
@@ -339,6 +360,11 @@ pub fn send_test_notification(app: AppHandle) -> AppResult<bool> {
         "如果你看到了这条通知，说明系统提醒功能工作正常。",
     );
     Ok(ok)
+}
+
+#[tauri::command]
+pub fn preview_sound(path: Option<String>) -> AppResult<()> {
+    crate::sound::play(path.as_deref()).map_err(crate::error::AppError::Other)
 }
 
 #[tauri::command]
