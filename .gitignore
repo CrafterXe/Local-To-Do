@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+*.local
+.vite
+src-tauri/target
+src-tauri/gen
+*.log
+.DS_Store
+publish/*.exe
+installer/stage/
+installer/*.sed

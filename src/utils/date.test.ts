@@ -1,0 +1,103 @@
+import { describe, expect, it } from "vitest";
+import {
+  addDays,
+  defaultReminderOffset,
+  diffDays,
+  formatDueLabel,
+  formatDueFull,
+  monthGrid,
+  parseDateString,
+  recurrenceLabel,
+  reminderLabel,
+  toDateString,
+  weekdayIndex,
+} from "./date";
+
+describe("日期基础函数", () => {
+  it("日期字符串与 Date 互相转换", () => {
+    const d = parseDateString("2026-03-05");
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(2);
+    expect(d.getDate()).toBe(5);
+    expect(toDateString(d)).toBe("2026-03-05");
+  });
+
+  it("addDays 跨月与闰年", () => {
+    expect(addDays("2026-02-28", 1)).toBe("2026-03-01");
+    expect(addDays("2024-02-28", 1)).toBe("2024-02-29");
+    expect(addDays("2024-03-01", -1)).toBe("2024-02-29");
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
+  });
+
+  it("diffDays 返回两个日期相差天数", () => {
+    expect(diffDays("2026-01-01", "2026-01-31")).toBe(30);
+    expect(diffDays("2026-01-31", "2026-01-01")).toBe(-30);
+    expect(diffDays("2026-03-01", "2026-03-01")).toBe(0);
+  });
+
+  it("weekdayIndex 以周一为 0", () => {
+    expect(weekdayIndex("2026-11-23")).toBe(0); // 周一
+    expect(weekdayIndex("2026-11-27")).toBe(4); // 周五
+    expect(weekdayIndex("2026-11-29")).toBe(6); // 周日
+  });
+
+  it("formatDueFull 输出完整日期", () => {
+    expect(formatDueFull("2026-11-23", "20:30")).toBe("2026年11月23日 周一 20:30");
+    expect(formatDueFull("2026-11-23", null)).toBe("2026年11月23日 周一");
+    expect(formatDueFull(null, null)).toBe("");
+  });
+
+  it("formatDueLabel 处理今天/明天/昨天", () => {
+    const today = toDateString(new Date());
+    expect(formatDueLabel(today, null)).toBe("今天");
+    expect(formatDueLabel(addDays(today, 1), "09:00")).toBe("明天 09:00");
+    expect(formatDueLabel(addDays(today, -1), null)).toBe("昨天");
+    expect(formatDueLabel(null, "09:00")).toBe("");
+  });
+});
+
+describe("日历网格", () => {
+  it("返回 42 个单元格且包含当月首日", () => {
+    const cells = monthGrid(2026, 1); // 2026 年 2 月
+    expect(cells).toHaveLength(42);
+    expect(cells).toContain("2026-02-01");
+    // 2026-02-01 是周日，网格应从周一 2026-01-26 开始
+    expect(cells[0]).toBe("2026-01-26");
+    expect(cells[6]).toBe("2026-02-01");
+  });
+});
+
+describe("提醒与重复描述", () => {
+  it("reminderLabel 覆盖分钟/小时/天", () => {
+    expect(reminderLabel(null)).toBe("不提醒");
+    expect(reminderLabel(0)).toBe("准时提醒");
+    expect(reminderLabel(30)).toBe("提前 30 分钟");
+    expect(reminderLabel(120)).toBe("提前 2 小时");
+    expect(reminderLabel(2880)).toBe("提前 2 天");
+  });
+
+  it("recurrenceLabel 输出中文规则", () => {
+    expect(
+      recurrenceLabel({ kind: "daily", interval: 1, weekdays: "", monthDay: null }),
+    ).toBe("每天");
+    expect(
+      recurrenceLabel({ kind: "daily", interval: 2, weekdays: "", monthDay: null }),
+    ).toBe("每 2 天");
+    expect(
+      recurrenceLabel({ kind: "weekdays", interval: 1, weekdays: "", monthDay: null }),
+    ).toBe("每个工作日");
+    expect(
+      recurrenceLabel({ kind: "weekly", interval: 1, weekdays: "1,3,5", monthDay: null }),
+    ).toBe("每周 周一、周三、周五");
+    expect(
+      recurrenceLabel({ kind: "monthly", interval: 1, weekdays: "", monthDay: 31 }),
+    ).toBe("每月 31 日");
+    expect(
+      recurrenceLabel({ kind: "yearly", interval: 1, weekdays: "", monthDay: null }),
+    ).toBe("每年");
+  });
+
+  it("默认提醒偏移为准时提醒", () => {
+    expect(defaultReminderOffset()).toBe(0);
+  });
+});

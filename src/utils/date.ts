@@ -1,0 +1,150 @@
+/** 日期与提醒相关的纯函数（可在浏览器环境单元测试） */
+
+export const WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+export const WEEKDAY_SHORT = ["一", "二", "三", "四", "五", "六", "日"];
+
+export function toDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function parseDateString(s: string): Date {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1);
+}
+
+export function todayString(): string {
+  return toDateString(new Date());
+}
+
+export function addDays(s: string, days: number): string {
+  const d = parseDateString(s);
+  d.setDate(d.getDate() + days);
+  return toDateString(d);
+}
+
+/** 两个日期相差的天数（b - a） */
+export function diffDays(a: string, b: string): number {
+  const da = parseDateString(a).getTime();
+  const db = parseDateString(b).getTime();
+  return Math.round((db - da) / 86_400_000);
+}
+
+export function weekdayIndex(s: string): number {
+  // 0=周一 .. 6=周日
+  return (parseDateString(s).getDay() + 6) % 7;
+}
+
+/** 「今天 / 明天 / 昨天 / 12月1日 周二」 */
+export function formatDueLabel(date: string | null, time: string | null): string {
+  if (!date) return "";
+  const today = todayString();
+  const diff = diffDays(today, date);
+  let day: string;
+  if (diff === 0) day = "今天";
+  else if (diff === 1) day = "明天";
+  else if (diff === 2) day = "后天";
+  else if (diff === -1) day = "昨天";
+  else if (diff > 2 && diff < 7) day = `周${WEEKDAY_SHORT[weekdayIndex(date)]}`;
+  else {
+    const d = parseDateString(date);
+    day = `${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+  if (time) return `${day} ${time}`;
+  return day;
+}
+
+export function formatDueFull(date: string | null, time: string | null): string {
+  if (!date) return "";
+  const d = parseDateString(date);
+  const base = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 周${
+    WEEKDAY_SHORT[weekdayIndex(date)]
+  }`;
+  return time ? `${base} ${time}` : base;
+}
+
+export function formatTimestamp(ms: number | null): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const pad = (n: number) => `${n}`.padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
+export function formatRelative(ms: number | null): string {
+  if (!ms) return "从未";
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  return formatTimestamp(ms).slice(0, 10);
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/** 生成月份网格（周一开头），返回 6*7 个日期字符串 */
+export function monthGrid(year: number, month: number): string[] {
+  const first = new Date(year, month, 1);
+  const offset = (first.getDay() + 6) % 7; // 周一=0
+  const start = new Date(year, month, 1 - offset);
+  const cells: string[] = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    cells.push(toDateString(d));
+  }
+  return cells;
+}
+
+/** 根据 offset 生成提醒描述 */
+export function reminderLabel(offset: number | null): string {
+  if (offset === null) return "不提醒";
+  if (offset === 0) return "准时提醒";
+  if (offset < 60) return `提前 ${offset} 分钟`;
+  if (offset < 1440) return `提前 ${Math.round(offset / 60)} 小时`;
+  if (offset < 10080) return `提前 ${Math.round(offset / 1440)} 天`;
+  return `提前 ${Math.round(offset / 10080)} 周`;
+}
+
+export function recurrenceLabel(rec: {
+  kind: string;
+  interval: number;
+  weekdays: string;
+  monthDay: number | null;
+}): string {
+  const names = WEEKDAY_LABELS;
+  switch (rec.kind) {
+    case "daily":
+      return rec.interval <= 1 ? "每天" : `每 ${rec.interval} 天`;
+    case "weekdays":
+      return "每个工作日";
+    case "weekly": {
+      const days = rec.weekdays
+        .split(",")
+        .filter(Boolean)
+        .map((n) => names[Number(n) - 1])
+        .filter(Boolean);
+      const base = rec.interval <= 1 ? "每周" : `每 ${rec.interval} 周`;
+      return days.length ? `${base} ${days.join("、")}` : base;
+    }
+    case "monthly": {
+      const base = rec.interval <= 1 ? "每月" : `每 ${rec.interval} 个月`;
+      return rec.monthDay ? `${base} ${rec.monthDay} 日` : base;
+    }
+    case "yearly":
+      return "每年";
+    default:
+      return "自定义重复";
+  }
+}
+
+export function defaultReminderOffset(): number {
+  return 0;
+}

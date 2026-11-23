@@ -1,0 +1,164 @@
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+
+use crate::error::AppResult;
+use crate::state::AppState;
+use crate::{backup, db, domain, logging, repo};
+
+/// 超过该时长未触发的提醒视为「错过」，不再弹出打扰性通知
+const MISSED_GRACE_MS: i64 = 24 * 3600 * 1000;
+const CHECK_INTERVAL_MS: i64 = 20_000;
+const BACKUP_CHECK_INTERVAL_MS: i64 = 30 * 60 * 1000;
+
+static LAST_BACKUP_CHECK: AtomicI64 = AtomicI64::new(0);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiredReminderEvent {
+    pub task_id: String,
+    pub title: String,
+    pub body: String,
+    pub trigger_at: i64,
+    pub late: bool,
+}
+
+/// 发送 Windows 原生通知
+pub fn send_notification(app: &AppHandle, title: &str, body: &str) -> bool {
+    use tauri_plugin_notification::NotificationExt;
+    match app
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+    {
+        Ok(_) => true,
+        Err(e) => {
+            logging::warn(format!("通知发送失败: {e}"));
+            false
+        }
+    }
+}
+
+/// 启动后台提醒调度线程（不受窗口可见性影响）
+pub fn spawn(app: AppHandle, state: Arc<AppState>) {
+    let result = std::thread::Builder::new()
+        .name("reminder-scheduler".into())
+        .spawn(move || {
+            logging::info("提醒调度器已启动");
+            {
+                let conn = state.db.lock();
+                let _ = repo::prune_schedules(&conn);
+            }
+            loop {
+                let now = domain::local_now_ms();
+                if let Err(e) = tick(&app, &state, now) {
+                    logging::error(format!("调度器执行异常: {e}"));
+                }
+                maybe_auto_backup(&state);
+                let next = {
+                    let conn = state.db.lock();
+                    repo::next_trigger(&conn).unwrap_or(None)
+                };
+                let wait_ms = match next {
+                    Some(t) if t > now => (t - now).min(CHECK_INTERVAL_MS),
+                    _ => CHECK_INTERVAL_MS,
+                };
+                state.wait_for_wake(Duration::from_millis(wait_ms.max(500) as u64));
+            }
+        });
+    if let Err(e) = result {
+        logging::error(format!("无法启动调度线程: {e}"));
+    }
+}
+
+fn maybe_auto_backup(state: &Arc<AppState>) {
+    let now = domain::local_now_ms();
+    let last = LAST_BACKUP_CHECK.load(Ordering::Relaxed);
+    if now - last < BACKUP_CHECK_INTERVAL_MS {
+        return;
+    }
+    LAST_BACKUP_CHECK.store(now, Ordering::Relaxed);
+    let conn = state.db.lock();
+    match backup::auto_backup_if_due(&conn, &state.backup_dir, false) {
+        Ok(true) => logging::info("自动备份完成"),
+        Ok(false) => {}
+        Err(e) => logging::error(format!("自动备份失败: {e}")),
+    }
+}
+
+fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
+    let due = {
+        let conn = state.db.lock();
+        repo::due_reminders(&conn, now)?
+    };
+    if due.is_empty() {
+        return Ok(());
+    }
+    let notifications_enabled = {
+        let conn = state.db.lock();
+        db::load_settings(&conn)?.notifications_enabled
+    };
+
+    for r in due {
+        {
+            let conn = state.db.lock();
+            if r.is_completed || r.is_deleted || r.reminder_changed {
+                repo::mark_schedule(&conn, &r.schedule_id, "cancelled", now)?;
+                logging::info(format!("提醒计划失效，已取消: {}", r.title));
+                continue;
+            }
+            if now - r.trigger_at > MISSED_GRACE_MS {
+                repo::mark_schedule(&conn, &r.schedule_id, "missed", now)?;
+                logging::warn(format!(
+                    "提醒已错过超过 24 小时，不再弹窗: {} ({})",
+                    r.title,
+                    domain::format_trigger(r.trigger_at)
+                ));
+                continue;
+            }
+            // 先标记已触发，保证同一条提醒不会重复弹出
+            repo::mark_schedule(&conn, &r.schedule_id, "fired", now)?;
+        }
+
+        let due_text = match (&r.due_date, &r.due_time) {
+            (Some(d), Some(t)) => format!("到期：{d} {t}"),
+            (Some(d), None) => format!("到期：{d}"),
+            _ => String::new(),
+        };
+        let body = if due_text.is_empty() {
+            format!("清单：{}", r.list_name)
+        } else {
+            format!("{due_text} · {}", r.list_name)
+        };
+        let late = now - r.trigger_at > 120_000;
+        let body = if late {
+            format!("（延迟提醒）{body}")
+        } else {
+            body
+        };
+
+        if notifications_enabled {
+            let ok = send_notification(app, &r.title, &body);
+            if ok {
+                logging::info(format!("已发送提醒通知: {} @ {}", r.title, domain::format_trigger(r.trigger_at)));
+            }
+        } else {
+            logging::info(format!("通知已关闭，跳过发送: {}", r.title));
+        }
+
+        let payload = FiredReminderEvent {
+            task_id: r.task_id.clone(),
+            title: r.title.clone(),
+            body: body.clone(),
+            trigger_at: r.trigger_at,
+            late,
+        };
+        let _ = app.emit("reminder-fired", payload);
+    }
+    Ok(())
+}
