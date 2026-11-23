@@ -10,3 +10,4 @@ src-tauri/gen
 publish/*.exe
 installer/stage/
 installer/*.sed
+publish/fallback/*.exe
