@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   api,
@@ -26,9 +26,38 @@ interface Props {
   backups: BackupEntry[];
   nextReminder: number | null;
   onUpdate: (patch: Partial<AppSettings>) => Promise<void>;
+  onReset: () => Promise<void>;
   onRefresh: () => Promise<void>;
   notify: (msg: string, error?: boolean) => void;
 }
+
+function systemTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+const COMMON_TIMEZONES = [
+  "Asia/Shanghai",
+  "Asia/Tokyo",
+  "America/Los_Angeles",
+  "America/New_York",
+  "Europe/London",
+  "UTC",
+];
+
+const TIMEZONES: string[] = (() => {
+  let list: string[] = [];
+  try {
+    const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
+    list = intl.supportedValuesOf?.("timeZone") ?? [];
+  } catch {
+    list = [];
+  }
+  return Array.from(new Set([...COMMON_TIMEZONES, ...list]));
+})();
 
 function Switch({ on, onClick }: { on: boolean; onClick: () => void }) {
   return <button className={`switch ${on ? "on" : ""}`} onClick={onClick} aria-pressed={on} />;
@@ -41,11 +70,41 @@ export function SettingsView({
   backups,
   nextReminder,
   onUpdate,
+  onReset,
   onRefresh,
   notify,
 }: Props) {
   const [pendingRestore, setPendingRestore] = useState<{ path: string; report: RestoreReport } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [soundOk, setSoundOk] = useState(true);
+  const [tzQuery, setTzQuery] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .checkSoundFile(settings.soundPath)
+      .then((ok) => {
+        if (!cancelled) setSoundOk(ok);
+      })
+      .catch(() => {
+        if (!cancelled) setSoundOk(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.soundPath]);
+
+  const timezoneOptions = useMemo(() => {
+    const q = tzQuery.trim().toLowerCase();
+    const base = q
+      ? TIMEZONES.filter((z) => z.toLowerCase().includes(q))
+      : TIMEZONES;
+    if (settings.timezone && !base.includes(settings.timezone)) {
+      return [settings.timezone, ...base];
+    }
+    return base;
+  }, [tzQuery, settings.timezone]);
 
   const testNotification = async () => {
     try {
@@ -185,19 +244,60 @@ export function SettingsView({
       </section>
 
       <section className="settings-section">
-        <h2 className="settings-title">通知与提醒</h2>
+        <h2 className="settings-title">时间与时区</h2>
         <div className="setting-row">
           <div className="setting-text">
-            <div className="setting-name">启用提醒通知</div>
+            <div className="setting-name">自动设置时区</div>
             <div className="setting-hint">
-              下一次提醒：
-              {nextReminder ? formatTimestamp(nextReminder) : "暂无计划中的提醒"}
+              {settings.timezoneAuto
+                ? `跟随 Windows 系统时区（${systemTimeZone()}）`
+                : "使用下方手动选择的时区"}
             </div>
           </div>
           <Switch
-            on={settings.notificationsEnabled}
-            onClick={() => void onUpdate({ notificationsEnabled: !settings.notificationsEnabled })}
+            on={settings.timezoneAuto}
+            onClick={() =>
+              void onUpdate(
+                settings.timezoneAuto
+                  ? { timezoneAuto: false, timezone: settings.timezone ?? systemTimeZone() }
+                  : { timezoneAuto: true },
+              )
+            }
           />
+        </div>
+        {!settings.timezoneAuto && (
+          <div className="setting-row timezone-row">
+            <div className="setting-text">
+              <div className="setting-name">选择时区</div>
+              <div className="setting-hint">当前：{settings.timezone ?? systemTimeZone()}</div>
+            </div>
+            <div className="timezone-picker">
+              <input
+                className="input"
+                placeholder="搜索时区"
+                value={tzQuery}
+                onChange={(e) => setTzQuery(e.target.value)}
+              />
+              <select
+                className="select"
+                value={settings.timezone ?? systemTimeZone()}
+                onChange={(e) => void onUpdate({ timezone: e.target.value })}
+              >
+                {timezoneOptions.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="settings-section">
+        <h2 className="settings-title">通知与提醒</h2>
+        <div className="settings-inline-hint">
+          下一次提醒：{nextReminder ? formatTimestamp(nextReminder) : "暂无计划中的提醒"}
         </div>
         <div className="setting-row">
           <div className="setting-text">
@@ -211,11 +311,13 @@ export function SettingsView({
         <div className="setting-row">
           <div className="setting-text">
             <div className="setting-name">提示音文件</div>
-            <div className="setting-hint">
-              {settings.soundPath
-                ? settings.soundPath.split(/[\\/]/).pop()
-                : "默认系统提示音"}
+            <div
+              className={`setting-hint sound-path ${!soundOk ? "missing" : ""}`}
+              title={settings.soundPath ?? "系统默认提示音"}
+            >
+              {settings.soundPath ?? "系统默认提示音"}
             </div>
+            {!soundOk && <div className="setting-hint missing">文件不存在，请重新选择</div>}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button
@@ -398,11 +500,36 @@ export function SettingsView({
       <section className="settings-section">
         <h2 className="settings-title">关于</h2>
         <p className="settings-desc">
-          Local To Do v{info?.version ?? "1.0.0"} · 本地优先，完全离线。
+          Local To Do v{info?.version ?? "1.1.1"} · 本地优先，完全离线。
           <br />
           不联网、无账号、无遥测，数据归您所有。
         </p>
       </section>
+
+      <section className="settings-section settings-reset">
+        <button className="btn" onClick={() => setConfirmReset(true)}>
+          <IconRefresh size={15} />
+          重置设置
+        </button>
+      </section>
+
+      {confirmReset && (
+        <ConfirmModal
+          title="确认重置设置"
+          message="将恢复应用设置的初始状态：默认主题、默认提示音、默认启动与窗口设置，以及自动跟随系统时区。不会删除任何任务、清单、备忘录、历史记录或最近删除数据，也不会重置任务自身的到期时间、提醒、重要与完成状态。"
+          actions={[
+            {
+              label: "重置设置",
+              kind: "danger",
+              onClick: async () => {
+                await onReset();
+                setConfirmReset(false);
+              },
+            },
+          ]}
+          onClose={() => setConfirmReset(false)}
+        />
+      )}
 
       {pendingRestore && (
         <ConfirmModal

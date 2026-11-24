@@ -67,6 +67,8 @@ pub struct Task {
     pub due_time: Option<String>,
     /// 提前分钟数，0 表示准时，None 表示无提醒
     pub reminder_offset: Option<i64>,
+    /// 该任务的提醒开关（与提醒方案相互独立）
+    pub reminder_enabled: bool,
     /// 下一次提醒触发的 UTC 毫秒时间戳
     pub reminder_at: Option<i64>,
     pub recurrence_id: Option<String>,
@@ -147,6 +149,10 @@ pub struct AppSettings {
     pub auto_backup_interval_hours: i64,
     pub last_backup_at: Option<i64>,
     pub default_list_id: Option<String>,
+    /// 自动跟随 Windows 系统时区
+    pub timezone_auto: bool,
+    /// 手动时区（IANA 名称，如 Asia/Shanghai），自动模式下忽略
+    pub timezone: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -163,6 +169,8 @@ impl Default for AppSettings {
             auto_backup_interval_hours: 24,
             last_backup_at: None,
             default_list_id: None,
+            timezone_auto: true,
+            timezone: None,
         }
     }
 }

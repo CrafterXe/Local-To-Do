@@ -3,6 +3,35 @@
 export const WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 export const WEEKDAY_SHORT = ["一", "二", "三", "四", "五", "六", "日"];
 
+/** 当前用于显示的时区（null 表示跟随系统时区） */
+let displayTimezone: string | null = null;
+
+export function setDisplayTimezone(tz: string | null): void {
+  displayTimezone = tz && tz.trim() ? tz : null;
+}
+
+function zonedParts(ms: number): { date: string; time: string } | null {
+  if (!displayTimezone) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: displayTimezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(ms));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    return {
+      date: `${get("year")}-${get("month")}-${get("day")}`,
+      time: `${get("hour")}:${get("minute")}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function toDateString(d: Date): string {
   const y = d.getFullYear();
   const m = `${d.getMonth() + 1}`.padStart(2, "0");
@@ -16,7 +45,7 @@ export function parseDateString(s: string): Date {
 }
 
 export function todayString(): string {
-  return toDateString(new Date());
+  return zonedParts(Date.now())?.date ?? toDateString(new Date());
 }
 
 export function addDays(s: string, days: number): string {
@@ -66,7 +95,9 @@ export function formatDueFull(date: string | null, time: string | null): string 
 }
 
 export function formatTimestamp(ms: number | null): string {
-  if (!ms) return "";
+  if (ms === null) return "";
+  const zoned = zonedParts(ms);
+  if (zoned) return `${zoned.date} ${zoned.time}`;
   const d = new Date(ms);
   const pad = (n: number) => `${n}`.padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(

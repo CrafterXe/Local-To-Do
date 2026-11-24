@@ -30,6 +30,13 @@ impl Db {
             let c = db.lock();
             migrate(&c)?;
             seed(&c)?;
+            // 启动时先确定生效时区，再重建提醒计划，保证提醒按正确时区计算
+            let settings = load_settings(&c)?;
+            crate::domain::set_timezone(if settings.timezone_auto {
+                None
+            } else {
+                settings.timezone.clone()
+            });
             refresh_all_reminders(&c)?;
         }
         Ok(db)
@@ -57,7 +64,7 @@ impl Db {
     }
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 fn migrate(conn: &Connection) -> AppResult<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -95,6 +102,7 @@ fn migrate(conn: &Connection) -> AppResult<()> {
             due_date TEXT,
             due_time TEXT,
             reminder_offset INTEGER,
+            reminder_enabled INTEGER NOT NULL DEFAULT 1,
             reminder_at INTEGER,
             recurrence_id TEXT REFERENCES recurrences(id) ON DELETE SET NULL,
             series_id TEXT,
@@ -168,6 +176,19 @@ fn migrate(conn: &Connection) -> AppResult<()> {
             )?;
         }
     }
+    if version < 3 {
+        // v3：任务级提醒开关，与提醒方案分离。历史任务保持原有提醒行为（默认开启）
+        let has_column: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'reminder_enabled'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_column == 0 {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN reminder_enabled INTEGER NOT NULL DEFAULT 1;",
+            )?;
+        }
+    }
     if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
@@ -206,14 +227,18 @@ fn seed(conn: &Connection) -> AppResult<()> {
 pub fn refresh_all_reminders(conn: &Connection) -> AppResult<()> {
     use crate::domain::compute_reminder_at;
     let mut stmt = conn.prepare(
-        "SELECT id, due_date, due_time, reminder_offset FROM tasks
+        "SELECT id, due_date, due_time, reminder_offset, reminder_enabled FROM tasks
          WHERE is_completed = 0 AND deleted_at IS NULL AND reminder_offset IS NOT NULL",
     )?;
-    let rows: Vec<(String, Option<String>, Option<String>, Option<i64>)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+    let rows: Vec<(String, Option<String>, Option<String>, Option<i64>, i64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
-    for (id, date, time, offset) in rows {
-        let at = compute_reminder_at(date.as_deref(), time.as_deref(), offset);
+    for (id, date, time, offset, enabled) in rows {
+        let at = if enabled != 0 {
+            compute_reminder_at(date.as_deref(), time.as_deref(), offset)
+        } else {
+            None
+        };
         conn.execute(
             "UPDATE tasks SET reminder_at = ?1 WHERE id = ?2",
             rusqlite::params![at, id],
@@ -246,6 +271,8 @@ pub fn save_settings(conn: &Connection, s: &AppSettings) -> AppResult<()> {
             "default_list_id",
             s.default_list_id.clone().unwrap_or_default(),
         ),
+        ("timezone_auto", bool_str(s.timezone_auto)),
+        ("timezone", s.timezone.clone().unwrap_or_default()),
     ];
     for (k, v) in pairs {
         conn.execute(
@@ -263,6 +290,16 @@ fn bool_str(b: bool) -> String {
     } else {
         "0".into()
     }
+}
+
+/// 重置应用级设置为默认值。
+/// 只操作 app_settings 表，不触碰任务、清单、备忘录、历史与最近删除数据。
+pub fn reset_settings(conn: &Connection) -> AppResult<AppSettings> {
+    let s = AppSettings::default();
+    conn.execute("DELETE FROM app_settings", [])?;
+    save_settings(conn, &s)?;
+    crate::domain::set_timezone(None);
+    Ok(s)
 }
 
 pub fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
@@ -290,6 +327,8 @@ pub fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             "default_list_id" => {
                 s.default_list_id = if v.is_empty() { None } else { Some(v) }
             }
+            "timezone_auto" => s.timezone_auto = v != "0",
+            "timezone" => s.timezone = if v.trim().is_empty() { None } else { Some(v) },
             _ => {}
         }
     }

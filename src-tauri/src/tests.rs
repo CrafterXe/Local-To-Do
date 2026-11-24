@@ -25,6 +25,7 @@ fn make_input(conn: &Connection, title: &str) -> TaskInput {
         due_date: None,
         due_time: None,
         reminder_offset: None,
+        reminder_enabled: None,
         my_day: None,
         recurrence: None,
     }
@@ -143,6 +144,7 @@ fn reminder_schedule_created_updated_and_cancelled() {
             due_date: Some("2026-12-01".into()),
             due_time: Some("20:30".into()),
             reminder_offset: Some(10),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "提醒测试")
         },
     )
@@ -157,6 +159,7 @@ fn reminder_schedule_created_updated_and_cancelled() {
             due_date: Some("2026-12-02".into()),
             due_time: Some("08:00".into()),
             reminder_offset: Some(0),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "提醒测试")
         },
     )
@@ -178,6 +181,7 @@ fn completing_recurring_task_generates_next_occurrence() {
             due_date: Some("2026-01-31".into()),
             due_time: Some("09:00".into()),
             reminder_offset: Some(0),
+            reminder_enabled: Some(true),
             recurrence: Some(RecurrenceInput {
                 kind: "monthly".into(),
                 interval: 1,
@@ -280,6 +284,7 @@ fn backup_export_and_restore_roundtrip() {
             due_date: Some("2026-12-05".into()),
             due_time: Some("10:00".into()),
             reminder_offset: Some(5),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "备份任务")
         },
     )
@@ -347,6 +352,7 @@ fn due_reminders_returns_pending_once() {
             due_date: Some(date),
             due_time: Some("23:59".into()),
             reminder_offset: Some(0),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "到点提醒")
         },
     )
@@ -381,7 +387,7 @@ fn migration_from_v1_adds_list_deleted_at() {
     let db = Db::open(&path).unwrap();
     let conn = db.lock();
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let has_col: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('lists') WHERE name='deleted_at'",
@@ -408,6 +414,7 @@ fn deleted_list_is_restorable_with_its_tasks() {
             due_date: Some("2026-12-01".into()),
             due_time: Some("09:00".into()),
             reminder_offset: Some(0),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "任务一")
         },
     )
@@ -489,6 +496,7 @@ fn purge_list_and_empty_deleted_clear_everything() {
             list_id: Some(extra.id.clone()),
             due_date: Some("2026-12-01".into()),
             reminder_offset: Some(0),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "将被清除")
         },
     )
@@ -521,6 +529,7 @@ fn custom_reminder_offset_recomputes_after_due_change() {
             due_date: Some("2026-12-10".into()),
             due_time: Some("18:00".into()),
             reminder_offset: Some(offset),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "自定义提醒")
         },
     )
@@ -535,6 +544,7 @@ fn custom_reminder_offset_recomputes_after_due_change() {
             due_date: Some("2026-12-20".into()),
             due_time: Some("18:00".into()),
             reminder_offset: Some(offset),
+            reminder_enabled: Some(true),
             ..make_input(&conn, "自定义提醒")
         },
     )
@@ -594,6 +604,7 @@ fn fired_reminder_is_not_recreated_after_task_update() {
         due_date: Some(date),
         due_time: Some(time),
         reminder_offset: Some(0),
+        reminder_enabled: Some(true),
         ..make_input(&conn, "重复提醒检查")
     };
     let task = repo::create_task(&conn, &input).unwrap();
@@ -610,4 +621,159 @@ fn fired_reminder_is_not_recreated_after_task_update() {
     repo::complete_task(&conn, &task.id, false).unwrap();
     assert_eq!(pending_count(&conn), 0);
     assert_eq!(repo::due_reminders(&conn, now).unwrap().len(), 0);
+}
+
+#[test]
+fn editing_fields_keeps_important_and_my_day() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(&conn, &make_input(&conn, "独立性检查")).unwrap();
+    repo::set_important(&conn, &task.id, true).unwrap();
+    repo::set_my_day(&conn, &task.id, true).unwrap();
+
+    // 只改到期日期与提醒方案：重要 / 我的一天 保持不变
+    let updated = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-31".into()),
+            due_time: Some("18:00".into()),
+            reminder_offset: Some(20),
+            reminder_enabled: Some(true),
+            ..make_input(&conn, "独立性检查")
+        },
+    )
+    .unwrap();
+    assert!(updated.is_important);
+    assert!(updated.my_day.is_some());
+
+    // 只改所属清单：同样保持不变
+    let extra = repo::create_list(&conn, "另一个清单", "#00a884", "").unwrap();
+    let moved = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            list_id: Some(extra.id.clone()),
+            ..make_input(&conn, "独立性检查")
+        },
+    )
+    .unwrap();
+    assert!(moved.is_important);
+    assert!(moved.my_day.is_some());
+    assert_eq!(moved.list_id, extra.id);
+}
+
+#[test]
+fn new_task_reminder_is_disabled_by_default() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-01".into()),
+            due_time: Some("20:00".into()),
+            reminder_offset: Some(30),
+            ..make_input(&conn, "默认关闭提醒")
+        },
+    )
+    .unwrap();
+    assert!(!task.reminder_enabled);
+    assert!(task.reminder_at.is_none());
+    assert_eq!(pending_count(&conn), 0);
+
+    // 开启后按已有方案计算并注册调度
+    let on = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: task.due_date.clone(),
+            due_time: task.due_time.clone(),
+            reminder_offset: task.reminder_offset,
+            reminder_enabled: Some(true),
+            ..make_input(&conn, "默认关闭提醒")
+        },
+    )
+    .unwrap();
+    assert!(on.reminder_enabled);
+    assert!(on.reminder_at.is_some());
+    assert_eq!(pending_count(&conn), 1);
+
+    // 关闭后取消调度，但保留提醒方案
+    let off = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: task.due_date.clone(),
+            due_time: task.due_time.clone(),
+            reminder_offset: task.reminder_offset,
+            reminder_enabled: Some(false),
+            ..make_input(&conn, "默认关闭提醒")
+        },
+    )
+    .unwrap();
+    assert!(!off.reminder_enabled);
+    assert_eq!(off.reminder_offset, Some(30));
+    assert!(off.reminder_at.is_none());
+    assert_eq!(pending_count(&conn), 0);
+}
+
+#[test]
+fn notified_tasks_list_clears_after_completion() {
+    let db = setup();
+    let conn = db.lock();
+    let now = domain::local_now_ms();
+    let past = chrono::Local::now() - chrono::Duration::minutes(5);
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some(past.format("%Y-%m-%d").to_string()),
+            due_time: Some(past.format("%H:%M").to_string()),
+            reminder_offset: Some(0),
+            reminder_enabled: Some(true),
+            ..make_input(&conn, "提醒栏任务")
+        },
+    )
+    .unwrap();
+    assert!(repo::notified_tasks(&conn).unwrap().is_empty());
+
+    let due = repo::due_reminders(&conn, now).unwrap();
+    repo::mark_schedule(&conn, &due[0].schedule_id, "fired", now).unwrap();
+    let notified = repo::notified_tasks(&conn).unwrap();
+    assert_eq!(notified.len(), 1);
+    assert_eq!(notified[0].id, task.id);
+
+    // 完成后从提醒栏移除
+    repo::complete_task(&conn, &task.id, true).unwrap();
+    assert!(repo::notified_tasks(&conn).unwrap().is_empty());
+}
+
+#[test]
+fn reset_settings_keeps_tasks_and_lists() {
+    let db = setup();
+    let conn = db.lock();
+    let list = repo::create_list(&conn, "项目", "#ff6600", "").unwrap();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            list_id: Some(list.id.clone()),
+            ..make_input(&conn, "保留任务")
+        },
+    )
+    .unwrap();
+
+    let mut s = crate::db::load_settings(&conn).unwrap();
+    s.theme = "light".into();
+    s.sound_path = Some("C:\\ding.wav".into());
+    s.timezone_auto = false;
+    s.timezone = Some("Asia/Tokyo".into());
+    crate::db::save_settings(&conn, &s).unwrap();
+
+    let reset = crate::db::reset_settings(&conn).unwrap();
+    assert_eq!(reset.theme, crate::models::AppSettings::default().theme);
+    assert!(reset.timezone_auto);
+    assert!(reset.timezone.is_none());
+
+    // 用户数据不受影响
+    assert_eq!(repo::all_lists(&conn).unwrap().len(), 2);
+    assert_eq!(repo::get_task(&conn, &task.id).unwrap().title, "保留任务");
 }

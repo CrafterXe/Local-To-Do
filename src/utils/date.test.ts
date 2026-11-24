@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addDays,
   combineReminderOffset,
@@ -6,12 +6,15 @@ import {
   diffDays,
   formatDueLabel,
   formatDueFull,
+  formatTimestamp,
   monthGrid,
   parseDateString,
   recurrenceLabel,
   reminderLabel,
+  setDisplayTimezone,
   splitReminderOffset,
   toDateString,
+  todayString,
   weekdayIndex,
 } from "./date";
 
@@ -121,5 +124,34 @@ describe("提醒与重复描述", () => {
 
   it("默认提醒偏移为准时提醒", () => {
     expect(defaultReminderOffset()).toBe(0);
+  });
+});
+
+describe("显示时区", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    setDisplayTimezone(null);
+  });
+
+  it("手动时区影响 todayString", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-24T20:30:00Z"));
+    setDisplayTimezone("UTC");
+    expect(todayString()).toBe("2026-11-24");
+    setDisplayTimezone("Asia/Shanghai");
+    expect(todayString()).toBe("2026-11-25");
+  });
+
+  it("手动时区影响时间戳显示", () => {
+    setDisplayTimezone("Asia/Shanghai");
+    expect(formatTimestamp(0)).toBe("1970-01-01 08:00");
+    setDisplayTimezone("UTC");
+    expect(formatTimestamp(0)).toBe("1970-01-01 00:00");
+  });
+
+  it("无效时区回退到系统时区", () => {
+    setDisplayTimezone("Invalid/Zone");
+    expect(() => todayString()).not.toThrow();
+    expect(() => formatTimestamp(0)).not.toThrow();
   });
 });

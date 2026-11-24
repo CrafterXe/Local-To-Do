@@ -54,7 +54,20 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>) {
                 let conn = state.db.lock();
                 let _ = repo::prune_schedules(&conn);
             }
+            let mut last_offset = chrono::Local::now().offset().local_minus_utc();
             loop {
+                // 自动时区模式下，系统时区/夏令时变化后重新校准尚未触发的提醒
+                let offset = chrono::Local::now().offset().local_minus_utc();
+                if offset != last_offset {
+                    last_offset = offset;
+                    if domain::current_timezone().is_none() {
+                        let conn = state.db.lock();
+                        match db::refresh_all_reminders(&conn) {
+                            Ok(()) => logging::info("检测到系统时区变化，已重新校准提醒"),
+                            Err(e) => logging::warn(format!("重新校准提醒失败: {e}")),
+                        }
+                    }
+                }
                 let now = domain::local_now_ms();
                 if let Err(e) = tick(&app, &state, now) {
                     logging::error(format!("调度器执行异常: {e}"));
@@ -99,10 +112,10 @@ fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
     if due.is_empty() {
         return Ok(());
     }
-    let (notifications_enabled, sound_enabled, sound_path) = {
+    let (sound_enabled, sound_path) = {
         let conn = state.db.lock();
         let s = db::load_settings(&conn)?;
-        (s.notifications_enabled, s.sound_enabled, s.sound_path)
+        (s.sound_enabled, s.sound_path)
     };
 
     for r in due {
@@ -143,19 +156,16 @@ fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
             body
         };
 
-        if notifications_enabled {
-            let ok = send_notification(app, &r.title, &body);
-            if ok {
-                logging::info(format!("已发送提醒通知: {} @ {}", r.title, domain::format_trigger(r.trigger_at)));
+        // 提醒是否触发由任务自身的开关决定，不再依赖全局通知开关
+        let ok = send_notification(app, &r.title, &body);
+        if ok {
+            logging::info(format!("已发送提醒通知: {} @ {}", r.title, domain::format_trigger(r.trigger_at)));
+        }
+        // 应用自身播放提示音：不依赖 toast 的自定义声音能力
+        if sound_enabled {
+            if let Err(e) = crate::sound::play(sound_path.as_deref()) {
+                logging::warn(format!("提示音播放失败: {e}"));
             }
-            // 应用自身播放提示音：不依赖 toast 的自定义声音能力
-            if sound_enabled {
-                if let Err(e) = crate::sound::play(sound_path.as_deref()) {
-                    logging::warn(format!("提示音播放失败: {e}"));
-                }
-            }
-        } else {
-            logging::info(format!("通知已关闭，跳过发送: {}", r.title));
         }
 
         let payload = FiredReminderEvent {

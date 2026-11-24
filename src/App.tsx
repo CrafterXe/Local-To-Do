@@ -23,8 +23,9 @@ import { SettingsView } from "./components/SettingsView";
 import { HistoryView } from "./components/HistoryView";
 import { ListModal } from "./components/ListModal";
 import { ConfirmModal } from "./components/Modal";
-import { IconPlus, IconRefresh, IconX } from "./components/Icons";
-import { todayString } from "./utils/date";
+import { IconBell, IconPlus, IconRefresh } from "./components/Icons";
+import { formatDueLabel, setDisplayTimezone, todayString } from "./utils/date";
+import type { SortKind } from "./utils/sort";
 
 type ModalState =
   | { type: "list"; list?: TaskListModel }
@@ -35,9 +36,17 @@ type ModalState =
   | { type: "deleteNote"; note: Note }
   | null;
 
-interface Banner {
-  title: string;
-  body: string;
+function viewKey(v: View): string {
+  return v.kind === "list" ? `list:${v.listId ?? ""}` : v.kind;
+}
+
+function readSort(key: string): SortKind {
+  try {
+    const saved = window.localStorage.getItem(`ltd.sort.${key}`);
+    return saved === "name" || saved === "created" || saved === "due" ? saved : null;
+  } catch {
+    return null;
+  }
 }
 
 export default function App() {
@@ -59,7 +68,10 @@ export default function App() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [search, setSearch] = useState("");
   const [toast, setToast] = useState<{ msg: string; error: boolean } | null>(null);
-  const [banner, setBanner] = useState<Banner | null>(null);
+  const [notifiedTasks, setNotifiedTasks] = useState<Task[]>([]);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [sortBy, setSortBy] = useState<SortKind>(() => readSort("myDay"));
+  const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const [tick, setTick] = useState(0);
@@ -96,6 +108,7 @@ export default function App() {
       setLists(ls);
       setCounts(cs);
       setSettings(st);
+      setDisplayTimezone(st.timezoneAuto ? null : st.timezone);
       setNextReminder(nr);
     } catch (e) {
       notify(`加载数据失败：${String(e)}`, true);
@@ -200,10 +213,45 @@ export default function App() {
     };
   }, [view, tick, booted, notify]);
 
+  // 已触发提醒但未完成的任务（提醒栏）
+  useEffect(() => {
+    if (!booted) return;
+    let cancelled = false;
+    api
+      .listNotifiedTasks()
+      .then((data) => {
+        if (!cancelled) setNotifiedTasks(data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [booted, tick]);
+
+  // 每个视图独立记忆排序方式
+  useEffect(() => {
+    setSortBy(readSort(viewKey(view)));
+  }, [view]);
+
+  // 系统唤醒 / 窗口重新获得焦点后，按最新系统时间与时区校准提醒
+  useEffect(() => {
+    if (!booted) return;
+    const resync = () => {
+      void api
+        .resyncReminders()
+        .then(() => {
+          bump();
+          void refreshMeta();
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("focus", resync);
+    return () => window.removeEventListener("focus", resync);
+  }, [booted, bump, refreshMeta]);
+
   // 系统事件
   useEffect(() => {
-    const un1 = listen<Banner>("reminder-fired", (e) => {
-      setBanner(e.payload);
+    const un1 = listen<{ title: string }>("reminder-fired", () => {
       bump();
       void refreshMeta();
     });
@@ -251,6 +299,43 @@ export default function App() {
       notify(String(e), true);
     }
   };
+
+  const changeSort = (kind: Exclude<SortKind, null>) => {
+    setSortBy(kind);
+    try {
+      window.localStorage.setItem(`ltd.sort.${viewKey(view)}`, kind);
+    } catch {
+      // 忽略无法写入的存储（隐私模式等）
+    }
+  };
+
+  const jumpToNotified = (task: Task) => {
+    setReminderOpen(false);
+    setSearch("");
+    setSelectedId(null);
+    setSelectedTask(null);
+    setView({ kind: "all" });
+    setFocusTaskId(task.id);
+  };
+
+  // 跳转后定位并柔和闪动两次
+  useEffect(() => {
+    if (!focusTaskId || view.kind !== "all") return;
+    const el = document.querySelector<HTMLElement>(`[data-task-id="${focusTaskId}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.remove("task-flash");
+    void el.offsetWidth;
+    el.classList.add("task-flash");
+    const timer = window.setTimeout(() => {
+      el.classList.remove("task-flash");
+      setFocusTaskId(null);
+    }, 1500);
+    return () => {
+      window.clearTimeout(timer);
+      el.classList.remove("task-flash");
+    };
+  }, [focusTaskId, view.kind, tasks]);
 
   const quickAdd = async (title: string) => {
     const listId =
@@ -383,8 +468,31 @@ export default function App() {
     try {
       const updated = await api.updateSettings({ ...settings, ...patch });
       setSettings(updated);
+      setDisplayTimezone(updated.timezoneAuto ? null : updated.timezone);
+      setNextReminder(await api.getNextReminder());
     } catch (e) {
       notify(String(e), true);
+    }
+  };
+
+  const resetAllSettings = async () => {
+    try {
+      const updated = await api.resetSettings();
+      setSettings(updated);
+      setDisplayTimezone(null);
+      setSortBy(null);
+      try {
+        Object.keys(window.localStorage)
+          .filter((k) => k.startsWith("ltd.sort."))
+          .forEach((k) => window.localStorage.removeItem(k));
+      } catch {
+        // 忽略存储异常
+      }
+      bump();
+      await refreshMeta();
+      notify("已恢复默认设置");
+    } catch (e) {
+      notify(`重置失败：${String(e)}`, true);
     }
   };
 
@@ -507,18 +615,53 @@ export default function App() {
           <div className="main-subtitle">{subtitle}</div>
         </header>
 
-        {banner && (
-          <div className="reminder-banner">
-            <span style={{ display: "flex", color: "var(--accent)" }}>
-              <IconRefresh size={15} />
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, color: "var(--text-strong)" }}>{banner.title}</div>
-              <div style={{ color: "var(--muted)", marginTop: 2 }}>{banner.body}</div>
+        {notifiedTasks.length > 0 && (
+          <div className="reminder-stack">
+            <div
+              className={`reminder-banner ${notifiedTasks.length > 1 ? "stacked" : ""} ${
+                reminderOpen ? "expanded" : ""
+              }`}
+              title={
+                notifiedTasks.length > 1
+                  ? `${notifiedTasks.length} 个任务提醒尚未完成`
+                  : undefined
+              }
+              onClick={() => {
+                if (notifiedTasks.length > 1) setReminderOpen((v) => !v);
+              }}
+            >
+              <span className="reminder-icon">
+                <IconBell size={15} />
+              </span>
+              <div className="reminder-main">
+                <div className="reminder-title">{notifiedTasks[0].title}</div>
+                <div className="reminder-sub">
+                  {notifiedTasks[0].dueDate
+                    ? formatDueLabel(notifiedTasks[0].dueDate, notifiedTasks[0].dueTime)
+                    : notifiedTasks[0].listName}
+                </div>
+              </div>
+              {notifiedTasks.length > 1 && (
+                <span className="reminder-count">{notifiedTasks.length}</span>
+              )}
             </div>
-            <button className="icon-btn" onClick={() => setBanner(null)}>
-              <IconX size={14} />
-            </button>
+
+            {reminderOpen && notifiedTasks.length > 1 && (
+              <div className="reminder-list">
+                {notifiedTasks.map((t) => (
+                  <button
+                    key={t.id}
+                    className="reminder-item"
+                    onClick={() => jumpToNotified(t)}
+                  >
+                    <span className="reminder-item-title">{t.title}</span>
+                    <span className="reminder-item-meta">
+                      {t.dueDate ? formatDueLabel(t.dueDate, t.dueTime) : t.listName}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -541,6 +684,7 @@ export default function App() {
             backups={backups}
             nextReminder={nextReminder}
             onUpdate={updateSettings}
+            onReset={resetAllSettings}
             onRefresh={async () => {
               await refreshMeta();
               await loadSystemInfo();
@@ -558,6 +702,8 @@ export default function App() {
             searchActive={!!search.trim()}
             showListTag={view.kind !== "list"}
             focusSignal={focusSignal}
+            sortBy={sortBy}
+            onSort={changeSort}
             onSelect={(id) => void selectTask(id)}
             onToggleComplete={(t) => void toggleComplete(t)}
             onToggleImportant={(t) => void toggleImportant(t)}

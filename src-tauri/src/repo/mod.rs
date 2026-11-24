@@ -65,6 +65,7 @@ pub fn due_reminders(conn: &Connection, now: i64) -> AppResult<Vec<PendingRemind
          JOIN tasks t ON t.id = rs.task_id
          LEFT JOIN lists l ON l.id = t.list_id
          WHERE rs.status = 'pending' AND rs.trigger_at <= ?1
+           AND IFNULL(t.reminder_enabled, 1) = 1
          ORDER BY rs.trigger_at ASC",
     )?;
     let rows = stmt.query_map([now], |r| {

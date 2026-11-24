@@ -97,6 +97,13 @@ pub fn list_tasks(state: State<'_, Arc<AppState>>, query: TaskQuery) -> AppResul
     repo::list_tasks(&conn, &query)
 }
 
+/// 已触发提醒但尚未完成的任务（提醒栏使用）
+#[tauri::command]
+pub fn list_notified_tasks(state: State<'_, Arc<AppState>>) -> AppResult<Vec<Task>> {
+    let conn = state.db.lock();
+    repo::notified_tasks(&conn)
+}
+
 #[tauri::command]
 pub fn get_task(state: State<'_, Arc<AppState>>, id: String) -> AppResult<Task> {
     let conn = state.db.lock();
@@ -311,11 +318,48 @@ pub fn update_settings(
     {
         let conn = state.db.lock();
         db::save_settings(&conn, &s)?;
+        crate::domain::set_timezone(if s.timezone_auto {
+            None
+        } else {
+            s.timezone.clone()
+        });
+        db::refresh_all_reminders(&conn)?;
     }
     apply_theme(&app, &s.theme);
     apply_autostart(&app, s.autostart);
     state.notify_scheduler();
     Ok(s)
+}
+
+/// 恢复应用级默认设置（不触碰任何用户数据）
+#[tauri::command]
+pub fn reset_settings(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppResult<AppSettings> {
+    let s = {
+        let conn = state.db.lock();
+        let s = db::reset_settings(&conn)?;
+        db::refresh_all_reminders(&conn)?;
+        s
+    };
+    apply_theme(&app, &s.theme);
+    apply_autostart(&app, s.autostart);
+    state.notify_scheduler();
+    Ok(s)
+}
+
+/// 重新读取系统时区/时间并校准所有提醒计划
+#[tauri::command]
+pub fn resync_reminders(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    let conn = state.db.lock();
+    let s = db::load_settings(&conn)?;
+    crate::domain::set_timezone(if s.timezone_auto {
+        None
+    } else {
+        s.timezone.clone()
+    });
+    db::refresh_all_reminders(&conn)?;
+    drop(conn);
+    state.notify_scheduler();
+    Ok(())
 }
 
 fn apply_autostart(app: &AppHandle, enabled: bool) {
@@ -365,6 +409,15 @@ pub fn send_test_notification(app: AppHandle) -> AppResult<bool> {
 #[tauri::command]
 pub fn preview_sound(path: Option<String>) -> AppResult<()> {
     crate::sound::play(path.as_deref()).map_err(crate::error::AppError::Other)
+}
+
+/// 检查提示音文件是否可用（None 表示系统默认提示音，始终可用）
+#[tauri::command]
+pub fn check_sound_file(path: Option<String>) -> bool {
+    match path {
+        None => true,
+        Some(p) => p.trim() != "" && std::path::Path::new(&p).is_file(),
+    }
 }
 
 #[tauri::command]

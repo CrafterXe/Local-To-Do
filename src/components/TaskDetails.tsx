@@ -35,8 +35,8 @@ interface Draft {
   dueDate: string | null;
   dueTime: string | null;
   reminderOffset: number | null;
+  reminderEnabled: boolean;
   listId: string;
-  myDay: string | null;
   recurrence: RecurrenceInput | null;
 }
 
@@ -47,8 +47,8 @@ function fromTask(t: Task): Draft {
     dueDate: t.dueDate,
     dueTime: t.dueTime,
     reminderOffset: t.reminderOffset,
+    reminderEnabled: t.reminderEnabled,
     listId: t.listId,
-    myDay: t.myDay,
     recurrence: t.recurrence
       ? {
           kind: t.recurrence.kind,
@@ -61,15 +61,15 @@ function fromTask(t: Task): Draft {
 }
 
 function toInput(d: Draft): TaskInput {
+  // 只提交本面板实际编辑的字段；重要 / 我的一天由独立入口维护，绝不在此覆盖
   return {
     title: d.title,
     listId: d.listId,
     note: d.note,
-    isImportant: null,
     dueDate: d.dueDate,
     dueTime: d.dueDate ? d.dueTime ?? "09:00" : null,
-    reminderOffset: d.dueDate ? d.reminderOffset : null,
-    myDay: d.myDay,
+    reminderOffset: d.reminderOffset,
+    reminderEnabled: d.reminderEnabled,
     recurrence: d.recurrence,
   };
 }
@@ -136,9 +136,12 @@ export function TaskDetails({
 
   const update = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
 
+  const openAt = (kind: PopKind, el: HTMLElement) => {
+    setPop(pop?.kind === kind ? null : { kind, rect: el.getBoundingClientRect() });
+  };
+
   const open = (kind: PopKind) => (e: React.MouseEvent<HTMLElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setPop(pop?.kind === kind ? null : { kind, rect });
+    openAt(kind, e.currentTarget);
   };
 
   const applyDue = (date: string, time: string) => {
@@ -305,16 +308,41 @@ export function TaskDetails({
             </span>
           </button>
 
-          <button className="detail-row" onClick={open("reminder")}>
-            <span className={`row-icon ${draft.reminderOffset !== null ? "on" : ""}`}>
+          <div
+            className={`detail-row reminder-row ${draft.reminderEnabled ? "" : "dim"}`}
+            role="button"
+            tabIndex={0}
+            onClick={draft.reminderEnabled ? open("reminder") : undefined}
+            onKeyDown={(e) => {
+              if (draft.reminderEnabled && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                openAt("reminder", e.currentTarget);
+              }
+            }}
+          >
+            <span
+              className={`row-icon ${
+                draft.reminderEnabled && draft.reminderOffset !== null ? "on" : ""
+              }`}
+            >
               <IconBell size={16} />
             </span>
-            <span className="row-label">提醒我</span>
+            <span className="row-label">提醒</span>
             <span className="row-value">
               <span>{reminderLabel(draft.reminderOffset)}</span>
-              <IconChevronDown size={13} />
+              <button
+                className={`switch small ${draft.reminderEnabled ? "on" : ""}`}
+                title={draft.reminderEnabled ? "关闭该任务的提醒" : "开启该任务的提醒"}
+                aria-pressed={draft.reminderEnabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  update({ reminderEnabled: !draft.reminderEnabled });
+                  setPop(null);
+                }}
+              />
+              {draft.reminderEnabled && <IconChevronDown size={13} />}
             </span>
-          </button>
+          </div>
 
           <button className="detail-row" onClick={open("repeat")}>
             <span className={`row-icon ${draft.recurrence ? "on" : ""}`}>

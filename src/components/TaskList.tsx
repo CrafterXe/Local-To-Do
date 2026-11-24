@@ -1,8 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DeletedList, Task, View } from "../api";
 import { formatDueLabel, formatTimestamp, todayString } from "../utils/date";
-import { IconCheck, IconNote, IconPlus, IconRepeat, IconStar, IconTrash, IconUpload } from "./Icons";
+import { sortTasks, type SortKind } from "../utils/sort";
+import {
+  IconCheck,
+  IconChevronRight,
+  IconList,
+  IconNote,
+  IconPlus,
+  IconRepeat,
+  IconStar,
+  IconTrash,
+  IconUpload,
+} from "./Icons";
 import { EmptyState } from "./EmptyState";
+
+const SORT_OPTIONS: { key: Exclude<SortKind, null>; label: string }[] = [
+  { key: "name", label: "按名称排序" },
+  { key: "created", label: "按创建时间排序" },
+  { key: "due", label: "按到期日期排序" },
+];
 
 interface Props {
   tasks: Task[];
@@ -12,6 +29,8 @@ interface Props {
   searchActive: boolean;
   showListTag: boolean;
   focusSignal: number;
+  sortBy: SortKind;
+  onSort: (kind: Exclude<SortKind, null>) => void;
   onSelect: (id: string) => void;
   onToggleComplete: (task: Task) => void;
   onToggleImportant: (task: Task) => void;
@@ -31,6 +50,8 @@ export function TaskList({
   searchActive,
   showListTag,
   focusSignal,
+  sortBy,
+  onSort,
   onSelect,
   onToggleComplete,
   onToggleImportant,
@@ -42,12 +63,46 @@ export function TaskList({
   onEmptyDeleted,
 }: Props) {
   const [draft, setDraft] = useState("");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [subOpen, setSubOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const today = todayString();
 
   useEffect(() => {
     if (focusSignal > 0) inputRef.current?.focus();
   }, [focusSignal]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => {
+      setMenu(null);
+      setSubOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+    };
+  }, [menu]);
+
+  const ordered = useMemo(() => sortTasks(tasks, sortBy), [tasks, sortBy]);
+
+  const openMenu = (e: React.MouseEvent) => {
+    const el = e.target as HTMLElement;
+    if (el.closest("input, textarea, select, [contenteditable='true']")) return;
+    e.preventDefault();
+    setSubOpen(false);
+    setMenu({
+      x: Math.min(e.clientX, window.innerWidth - 360),
+      y: Math.min(e.clientY, window.innerHeight - 180),
+    });
+  };
 
   const readOnly = view.kind === "completed" || view.kind === "deleted";
   const showQuickAdd = !readOnly && !searchActive;
@@ -61,26 +116,23 @@ export function TaskList({
   };
 
   return (
-    <div className="task-scroll">
+    <div className="task-scroll" onContextMenu={openMenu}>
       {showQuickAdd && (
         <div className="quick-add">
           <span className="plus-wrap"><IconPlus size={17} /></span>
           <input
             ref={inputRef}
             value={draft}
-            placeholder="添加任务，按 Enter 保存"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void submit();
               if (e.key === "Escape") setDraft("");
             }}
           />
-          {draft.trim() ? (
+          {draft.trim() && (
             <button className="quick-add-btn" onClick={() => void submit()}>
               添加
             </button>
-          ) : (
-            <span className="quick-hint">Enter 添加</span>
           )}
         </div>
       )}
@@ -147,7 +199,7 @@ export function TaskList({
           }
         />
       ) : (
-        tasks.map((t) => {
+        ordered.map((t) => {
           const overdue =
             !t.isCompleted && t.dueDate !== null && t.dueDate < today;
           const isToday = t.dueDate === today;
@@ -155,6 +207,7 @@ export function TaskList({
           return (
             <div
               key={t.id}
+              data-task-id={t.id}
               className={`task-row ${t.isCompleted ? "completed" : ""} ${
                 selectedId === t.id ? "selected" : ""
               }`}
@@ -255,6 +308,42 @@ export function TaskList({
             </div>
           );
         })
+      )}
+
+      {menu && (
+        <div
+          className="context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            className="context-menu-item has-sub"
+            onMouseEnter={() => setSubOpen(true)}
+            onClick={() => setSubOpen((v) => !v)}
+          >
+            <span className="cm-icon"><IconList size={14} /></span>
+            <span className="cm-label">查看</span>
+            <IconChevronRight size={13} className="cm-arrow" />
+            {subOpen && (
+              <div className="context-submenu">
+                {SORT_OPTIONS.map((o) => (
+                  <button
+                    key={o.key}
+                    className={`context-menu-item ${sortBy === o.key ? "selected" : ""}`}
+                    onClick={() => {
+                      onSort(o.key);
+                      setMenu(null);
+                      setSubOpen(false);
+                    }}
+                  >
+                    <span className="cm-label">{o.label}</span>
+                    {sortBy === o.key && <IconCheck size={13} />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

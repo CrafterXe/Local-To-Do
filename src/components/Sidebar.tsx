@@ -124,7 +124,6 @@ export function Sidebar({
         </div>
         <div className="brand">
           <div className="brand-name">Local To Do</div>
-          <div className="brand-sub">本地优先 · 完全离线</div>
         </div>
       </div>
 

@@ -27,6 +27,9 @@ pub struct TaskInput {
     pub due_time: Option<String>,
     #[serde(default)]
     pub reminder_offset: Option<i64>,
+    /// 提醒开关。新建任务时缺省为关闭
+    #[serde(default)]
+    pub reminder_enabled: Option<bool>,
     #[serde(default)]
     pub my_day: Option<String>,
     #[serde(default)]
@@ -66,7 +69,7 @@ const TASK_SELECT: &str = "SELECT t.id, t.list_id, t.title, t.note, t.is_importa
     t.series_id, t.parent_task_id, t.my_day, t.sort_order, t.created_at, t.updated_at,
     IFNULL(l.name, '任务'), IFNULL(l.color, '#2f6fed'),
     r.kind, r.interval, r.weekdays, r.month_day, r.base_date, r.created_at,
-    t.deleted_at
+    t.deleted_at, t.reminder_enabled
   FROM tasks t
   LEFT JOIN lists l ON l.id = t.list_id
   LEFT JOIN recurrences r ON r.id = t.recurrence_id";
@@ -100,6 +103,7 @@ fn map_task(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         due_date: r.get(7)?,
         due_time: r.get(8)?,
         reminder_offset: r.get(9)?,
+        reminder_enabled: r.get::<_, i64>(27)? != 0,
         reminder_at: r.get(10)?,
         recurrence_id,
         series_id: r.get(12)?,
@@ -223,6 +227,23 @@ pub fn get_task(conn: &Connection, id: &str) -> AppResult<Task> {
     Ok(task)
 }
 
+/// 已触发提醒、但尚未完成的任务，按最近触发时间倒序
+pub fn notified_tasks(conn: &Connection) -> AppResult<Vec<Task>> {
+    let sql = format!(
+        "{TASK_SELECT}
+         WHERE t.deleted_at IS NULL AND t.is_completed = 0
+           AND EXISTS (SELECT 1 FROM reminder_schedules s
+                       WHERE s.task_id = t.id AND s.status = 'fired')
+         ORDER BY (SELECT MAX(s2.trigger_at) FROM reminder_schedules s2
+                   WHERE s2.task_id = t.id AND s2.status = 'fired') DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], map_task)?;
+    let mut tasks = rows.collect::<Result<Vec<_>, _>>()?;
+    load_steps(conn, &mut tasks)?;
+    Ok(tasks)
+}
+
 fn resolve_list(conn: &Connection, list_id: Option<&str>) -> AppResult<String> {
     if let Some(id) = list_id {
         let exists: i64 = conn.query_row(
@@ -309,7 +330,12 @@ pub fn create_task(conn: &Connection, input: &TaskInput) -> AppResult<Task> {
     };
     let due_time = input.due_time.clone().filter(|t| !t.trim().is_empty());
     let reminder_offset = if input.reminder_offset.is_some() { input.reminder_offset } else { None };
-    let reminder_at = compute_reminder_at(due_date.as_deref(), due_time.as_deref(), reminder_offset);
+    let reminder_enabled = input.reminder_enabled.unwrap_or(false);
+    let reminder_at = if reminder_enabled {
+        compute_reminder_at(due_date.as_deref(), due_time.as_deref(), reminder_offset)
+    } else {
+        None
+    };
     let series_id = if recurrence_id.is_some() {
         Some(id.clone())
     } else {
@@ -320,9 +346,9 @@ pub fn create_task(conn: &Connection, input: &TaskInput) -> AppResult<Task> {
         .ok();
     conn.execute(
         "INSERT INTO tasks (id, list_id, title, note, is_important, is_completed, due_date, due_time,
-            reminder_offset, reminder_at, recurrence_id, series_id, parent_task_id, my_day,
+            reminder_offset, reminder_enabled, reminder_at, recurrence_id, series_id, parent_task_id, my_day,
             sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, ?13, ?14, ?15)",
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14, ?15, ?16)",
         params![
             id,
             list_id,
@@ -332,6 +358,7 @@ pub fn create_task(conn: &Connection, input: &TaskInput) -> AppResult<Task> {
             due_date,
             due_time,
             reminder_offset,
+            reminder_enabled as i64,
             reminder_at,
             recurrence_id,
             series_id,
@@ -352,7 +379,11 @@ pub fn update_task(conn: &Connection, id: &str, input: &TaskInput) -> AppResult<
     if title.is_empty() {
         return err("任务名称不能为空");
     }
-    let list_id = resolve_list(conn, input.list_id.as_deref())?;
+    let list_id = match input.list_id.as_deref() {
+        Some(id) => resolve_list(conn, Some(id))?,
+        None => existing.list_id.clone(),
+    };
+    let note = input.note.clone().unwrap_or_else(|| existing.note.clone());
     let due_date = input.due_date.clone();
     let due_time = input.due_time.clone().filter(|t| !t.trim().is_empty());
 
@@ -367,27 +398,37 @@ pub fn update_task(conn: &Connection, id: &str, input: &TaskInput) -> AppResult<
     let recurrence_changed = recurrence_id != existing.recurrence_id;
 
     let reminder_offset = input.reminder_offset;
-    let reminder_at = if existing.is_completed {
+    // 提醒开关未显式传入时保持原值，避免修改其他字段时被默认值覆盖
+    let reminder_enabled = input.reminder_enabled.unwrap_or(existing.reminder_enabled);
+    let reminder_at = if existing.is_completed || !reminder_enabled {
         None
     } else {
         compute_reminder_at(due_date.as_deref(), due_time.as_deref(), reminder_offset)
     };
 
+    // 重要 / 我的一天 与本次编辑的字段相互独立：未显式传入时保持数据库中的原值
+    let is_important = input.is_important.unwrap_or(existing.is_important);
+    let my_day = match input.my_day.clone() {
+        Some(v) => Some(v),
+        None => existing.my_day.clone(),
+    };
+
     conn.execute(
         "UPDATE tasks SET title=?1, list_id=?2, note=?3, is_important=?4, due_date=?5, due_time=?6,
-            reminder_offset=?7, reminder_at=?8, recurrence_id=?9, my_day=?10, updated_at=?11
-         WHERE id=?12",
+            reminder_offset=?7, reminder_enabled=?8, reminder_at=?9, recurrence_id=?10, my_day=?11, updated_at=?12
+         WHERE id=?13",
         params![
             title,
             list_id,
-            input.note.clone().unwrap_or_default(),
-            input.is_important.unwrap_or(false) as i64,
+            note,
+            is_important as i64,
             due_date,
             due_time,
             reminder_offset,
+            reminder_enabled as i64,
             reminder_at,
             recurrence_id,
-            input.my_day.clone(),
+            my_day,
             now_ms(),
             id
         ],
@@ -561,17 +602,21 @@ fn generate_next(conn: &Connection, task: &Task) -> AppResult<Option<Task>> {
     }
 
     let id = new_id();
-    let reminder_at = compute_reminder_at(
-        Some(&next_date),
-        task.due_time.as_deref(),
-        task.reminder_offset,
-    );
+    let reminder_at = if task.reminder_enabled {
+        compute_reminder_at(
+            Some(&next_date),
+            task.due_time.as_deref(),
+            task.reminder_offset,
+        )
+    } else {
+        None
+    };
     let series_id = task.series_id.clone().unwrap_or_else(|| task.id.clone());
     conn.execute(
         "INSERT INTO tasks (id, list_id, title, note, is_important, is_completed, due_date, due_time,
-            reminder_offset, reminder_at, recurrence_id, series_id, parent_task_id, my_day,
+            reminder_offset, reminder_enabled, reminder_at, recurrence_id, series_id, parent_task_id, my_day,
             sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14, ?15)",
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, ?14, ?15, ?16)",
         params![
             id,
             task.list_id,
@@ -581,6 +626,7 @@ fn generate_next(conn: &Connection, task: &Task) -> AppResult<Option<Task>> {
             next_date,
             task.due_time,
             task.reminder_offset,
+            task.reminder_enabled as i64,
             reminder_at,
             rec_id,
             series_id,
@@ -630,7 +676,11 @@ pub fn skip_occurrence(conn: &Connection, id: &str) -> AppResult<Task> {
         Some(d) => d.format("%Y-%m-%d").to_string(),
         None => return err("无法计算下一次重复日期"),
     };
-    let reminder_at = compute_reminder_at(Some(&next_date), task.due_time.as_deref(), task.reminder_offset);
+    let reminder_at = if task.reminder_enabled {
+        compute_reminder_at(Some(&next_date), task.due_time.as_deref(), task.reminder_offset)
+    } else {
+        None
+    };
     conn.execute(
         "UPDATE tasks SET due_date=?1, reminder_at=?2, updated_at=?3 WHERE id=?4",
         params![next_date, reminder_at, now_ms(), id],

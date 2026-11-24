@@ -40,6 +40,7 @@ export interface Task {
   dueDate: string | null;
   dueTime: string | null;
   reminderOffset: number | null;
+  reminderEnabled: boolean;
   reminderAt: number | null;
   recurrenceId: string | null;
   seriesId: string | null;
@@ -84,6 +85,8 @@ export interface AppSettings {
   autoBackupIntervalHours: number;
   lastBackupAt: number | null;
   defaultListId: string | null;
+  timezoneAuto: boolean;
+  timezone: string | null;
 }
 
 export interface AppInfo {
@@ -149,11 +152,12 @@ export interface TaskInput {
   title: string;
   listId: string | null;
   note: string | null;
-  isImportant: boolean | null;
+  isImportant?: boolean | null;
   dueDate: string | null;
   dueTime: string | null;
   reminderOffset: number | null;
-  myDay: string | null;
+  reminderEnabled?: boolean | null;
+  myDay?: string | null;
   recurrence: RecurrenceInput | null;
 }
 
@@ -193,6 +197,7 @@ export const api = {
     search?: string | null;
     includeCompleted?: boolean | null;
   }) => invoke<Task[]>("list_tasks", { query }),
+  listNotifiedTasks: () => invoke<Task[]>("list_notified_tasks"),
   getTask: (id: string) => invoke<Task>("get_task", { id }),
   createTask: (input: TaskInput) => invoke<Task>("create_task", { input }),
   updateTask: (id: string, input: TaskInput) => invoke<Task>("update_task", { id, input }),
@@ -230,10 +235,13 @@ export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) =>
     invoke<AppSettings>("update_settings", { settings }),
+  resetSettings: () => invoke<AppSettings>("reset_settings"),
+  resyncReminders: () => invoke<void>("resync_reminders"),
   getAppInfo: () => invoke<AppInfo>("get_app_info"),
   getDbStats: () => invoke<DbStats>("get_db_stats"),
   sendTestNotification: () => invoke<boolean>("send_test_notification"),
   previewSound: (path: string | null) => invoke<void>("preview_sound", { path }),
+  checkSoundFile: (path: string | null) => invoke<boolean>("check_sound_file", { path }),
   getNextReminder: () => invoke<number | null>("get_next_reminder"),
 
   createBackup: () => invoke<BackupEntry>("create_backup"),
