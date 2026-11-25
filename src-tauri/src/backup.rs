@@ -6,9 +6,9 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection};
 use serde_json::{Map, Value};
 
-use crate::db::{load_settings, save_settings};
-use crate::error::{err, AppError, AppResult};
-use crate::models::BackupEntry;
+use ltd_core::db::{load_settings, save_settings};
+use ltd_core::error::{err, AppError, AppResult};
+use ltd_core::models::BackupEntry;
 
 pub const APP_VERSION: &str = "1.0.0";
 const FORMAT: &str = "local-to-do-backup";
@@ -59,7 +59,7 @@ pub fn export_bundle(conn: &Connection) -> AppResult<Value> {
         "format": FORMAT,
         "version": FORMAT_VERSION,
         "appVersion": APP_VERSION,
-        "exportedAt": crate::domain::local_now_ms(),
+        "exportedAt": ltd_core::domain::local_now_ms(),
         "data": Value::Object(data),
     }))
 }
@@ -250,7 +250,7 @@ pub fn backup_now(backup_dir: &Path, conn: &Connection) -> AppResult<BackupEntry
     }
     conn.execute("VACUUM INTO ?1", params![db_path.to_string_lossy().to_string()])?;
 
-    let now = crate::domain::local_now_ms();
+    let now = ltd_core::domain::local_now_ms();
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('last_backup_at', ?1)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -404,11 +404,11 @@ pub fn restore_from_json(conn: &mut Connection, path: &Path) -> AppResult<Restor
     insert_rows(&tx, "task_history", &get_rows("task_history"))?;
     tx.commit()?;
 
-    crate::db::refresh_all_reminders(conn)?;
+    ltd_core::db::refresh_all_reminders(conn)?;
 
     // 恢复后更新最近备份时间
     let mut s = load_settings(conn)?;
-    s.last_backup_at = Some(crate::domain::local_now_ms());
+    s.last_backup_at = Some(ltd_core::domain::local_now_ms());
     save_settings(conn, &s)?;
 
     Ok(RestoreReport {
@@ -425,7 +425,7 @@ pub fn auto_backup_if_due(conn: &Connection, backup_dir: &Path, force: bool) -> 
     if !settings.auto_backup_enabled && !force {
         return Ok(false);
     }
-    let now = crate::domain::local_now_ms();
+    let now = ltd_core::domain::local_now_ms();
     let interval_ms = settings.auto_backup_interval_hours.max(1) * 3600 * 1000;
     if !force {
         if let Some(last) = settings.last_backup_at {

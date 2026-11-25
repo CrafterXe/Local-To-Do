@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use crate::db::Db;
+use ltd_core::db::Db;
 
 /// 全局应用状态（由 Tauri 管理）
 pub struct AppState {

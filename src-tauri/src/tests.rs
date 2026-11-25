@@ -2,11 +2,11 @@
 
 use rusqlite::Connection;
 
-use crate::db::Db;
-use crate::domain;
-use crate::models::TaskQuery;
-use crate::repo;
-use crate::repo::tasks::{RecurrenceInput, TaskInput};
+use ltd_core::db::Db;
+use ltd_core::domain;
+use ltd_core::models::TaskQuery;
+use ltd_core::repo;
+use ltd_core::repo::tasks::{RecurrenceInput, TaskInput};
 
 fn setup() -> Db {
     Db::open_memory().expect("内存数据库初始化失败")
@@ -595,14 +595,14 @@ fn backup_export_and_restore_roundtrip() {
 fn settings_roundtrip() {
     let db = setup();
     let conn = db.lock();
-    let mut settings = crate::db::load_settings(&conn).unwrap();
+    let mut settings = ltd_core::db::load_settings(&conn).unwrap();
     assert_eq!(settings.theme, "dark");
     settings.theme = "light".into();
     settings.notifications_enabled = false;
     settings.auto_backup_interval_hours = 6;
-    crate::db::save_settings(&conn, &settings).unwrap();
+    ltd_core::db::save_settings(&conn, &settings).unwrap();
 
-    let loaded = crate::db::load_settings(&conn).unwrap();
+    let loaded = ltd_core::db::load_settings(&conn).unwrap();
     assert_eq!(loaded.theme, "light");
     assert!(!loaded.notifications_enabled);
     assert_eq!(loaded.auto_backup_interval_hours, 6);
@@ -833,15 +833,15 @@ fn custom_reminder_offset_recomputes_after_due_change() {
 fn sound_settings_roundtrip() {
     let db = setup();
     let conn = db.lock();
-    let mut settings = crate::db::load_settings(&conn).unwrap();
+    let mut settings = ltd_core::db::load_settings(&conn).unwrap();
     assert!(settings.sound_enabled);
     assert!(settings.sound_path.is_none());
 
     settings.sound_enabled = false;
     settings.sound_path = Some("C:\\sounds\\ding.wav".into());
-    crate::db::save_settings(&conn, &settings).unwrap();
+    ltd_core::db::save_settings(&conn, &settings).unwrap();
 
-    let loaded = crate::db::load_settings(&conn).unwrap();
+    let loaded = ltd_core::db::load_settings(&conn).unwrap();
     assert!(!loaded.sound_enabled);
     assert_eq!(loaded.sound_path.as_deref(), Some("C:\\sounds\\ding.wav"));
 }
@@ -1099,15 +1099,15 @@ fn reset_settings_keeps_tasks_and_lists() {
     )
     .unwrap();
 
-    let mut s = crate::db::load_settings(&conn).unwrap();
+    let mut s = ltd_core::db::load_settings(&conn).unwrap();
     s.theme = "light".into();
     s.sound_path = Some("C:\\ding.wav".into());
     s.timezone_auto = false;
     s.timezone = Some("Asia/Tokyo".into());
-    crate::db::save_settings(&conn, &s).unwrap();
+    ltd_core::db::save_settings(&conn, &s).unwrap();
 
-    let reset = crate::db::reset_settings(&conn).unwrap();
-    assert_eq!(reset.theme, crate::models::AppSettings::default().theme);
+    let reset = ltd_core::db::reset_settings(&conn).unwrap();
+    assert_eq!(reset.theme, ltd_core::models::AppSettings::default().theme);
     assert!(reset.timezone_auto);
     assert!(reset.timezone.is_none());
 

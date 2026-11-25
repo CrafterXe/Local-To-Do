@@ -1,11 +1,6 @@
 mod backup;
 mod commands;
-mod db;
-mod domain;
-mod error;
 mod logging;
-mod models;
-mod repo;
 mod scheduler;
 mod sound;
 mod state;
@@ -15,6 +10,7 @@ mod tests;
 
 use std::sync::Arc;
 
+use ltd_core::db;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};

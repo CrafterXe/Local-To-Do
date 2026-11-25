@@ -42,8 +42,8 @@ impl Db {
         Ok(db)
     }
 
-    /// 内存数据库（仅测试用）
-    #[cfg(test)]
+    /// 内存数据库（测试用，需开启 test-utils 特性）
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn open_memory() -> AppResult<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
