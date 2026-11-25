@@ -114,6 +114,43 @@ impl Rule {
         }
     }
 
+    /// 第 n 次发生日期（n 从 0 开始，0 = 基准日期当天或之后首次命中）
+    /// 直接由「初时间点 + 规则 + 次数」计算，避免反复累加导致漂移
+    pub fn nth(&self, n: i64) -> Option<NaiveDate> {
+        if n < 0 {
+            return None;
+        }
+        let mut d = self.base_date;
+        let mut idx: i64 = -1;
+        for _ in 0..200_000 {
+            if self.matches(d) {
+                idx += 1;
+                if idx == n {
+                    return Some(d);
+                }
+            }
+            d = d.checked_add_signed(Duration::days(1))?;
+        }
+        None
+    }
+
+    /// `target` 对应的发生序号；未命中时返回其之前已发生的次数
+    pub fn index_of(&self, target: NaiveDate) -> i64 {
+        let mut d = self.base_date;
+        let mut idx: i64 = -1;
+        while d <= target {
+            if self.matches(d) {
+                idx += 1;
+            }
+            d += Duration::days(1);
+        }
+        if self.matches(target) {
+            idx.max(0)
+        } else {
+            idx + 1
+        }
+    }
+
     /// 返回严格晚于 `after` 的下一次发生日期
     pub fn next_after(&self, after: NaiveDate) -> Option<NaiveDate> {
         let mut d = after + Duration::days(1);
@@ -198,6 +235,40 @@ mod tests {
 
         let m = Rule::new("custom", 1, vec![], Some(15), d("2026-01-15"));
         assert_eq!(m.next_after(d("2026-01-15")), Some(d("2026-02-15")));
+    }
+
+    #[test]
+    fn nth_occurrence_is_stable() {
+        // 每天：第 0 次是基准日，第 n 次是基准日 + n 天
+        let daily = Rule::new("daily", 1, vec![], None, d("2026-12-09"));
+        assert_eq!(daily.nth(0), Some(d("2026-12-09")));
+        assert_eq!(daily.nth(1), Some(d("2026-12-10")));
+        assert_eq!(daily.nth(10), Some(d("2026-12-19")));
+
+        // 每周一：基准 2026-11-02（周一）
+        let weekly = Rule::new("weekly", 1, vec![1], None, d("2026-11-02"));
+        assert_eq!(weekly.nth(0), Some(d("2026-11-02")));
+        assert_eq!(weekly.nth(1), Some(d("2026-11-09")));
+        assert_eq!(weekly.nth(4), Some(d("2026-11-30")));
+
+        // 每月 31 日：2 月自动收敛到月末
+        let monthly = Rule::new("monthly", 1, vec![], Some(31), d("2026-01-31"));
+        assert_eq!(monthly.nth(1), Some(d("2026-02-28")));
+        assert_eq!(monthly.nth(2), Some(d("2026-03-31")));
+
+        // 次数与时间可由初时间点独立推算，不随调用顺序变化
+        assert_eq!(monthly.nth(2), monthly.clone().nth(2));
+    }
+
+    #[test]
+    fn index_of_matches_nth() {
+        let monthly = Rule::new("monthly", 1, vec![], Some(31), d("2026-01-31"));
+        assert_eq!(monthly.index_of(d("2026-01-31")), 0);
+        assert_eq!(monthly.index_of(d("2026-02-28")), 1);
+        // 未命中时返回其后第一次发生的序号
+        assert_eq!(monthly.index_of(d("2026-03-15")), 2);
+        // 05-01 之前已发生 4 次（01-31、02-28、03-31、04-30）
+        assert_eq!(monthly.index_of(d("2026-05-01")), 4);
     }
 
     #[test]

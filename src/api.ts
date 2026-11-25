@@ -45,6 +45,7 @@ export interface Task {
   recurrenceId: string | null;
   seriesId: string | null;
   parentTaskId: string | null;
+  recurrenceCount: number;
   myDay: string | null;
   sortOrder: number;
   createdAt: number;
@@ -207,7 +208,6 @@ export const api = {
   moveTask: (id: string, listId: string) => invoke<Task>("move_task", { id, listId }),
   completeTask: (id: string, completed: boolean) =>
     invoke<Task | null>("complete_task", { id, completed }),
-  skipOccurrence: (id: string) => invoke<Task>("skip_occurrence", { id }),
   deleteTask: (id: string, scope: "single" | "series") =>
     invoke<void>("delete_task", { id, scope }),
   restoreTask: (id: string) => invoke<Task>("restore_task", { id }),

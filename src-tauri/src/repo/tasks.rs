@@ -69,7 +69,7 @@ const TASK_SELECT: &str = "SELECT t.id, t.list_id, t.title, t.note, t.is_importa
     t.series_id, t.parent_task_id, t.my_day, t.sort_order, t.created_at, t.updated_at,
     IFNULL(l.name, '任务'), IFNULL(l.color, '#2f6fed'),
     r.kind, r.interval, r.weekdays, r.month_day, r.base_date, r.created_at,
-    t.deleted_at, t.reminder_enabled
+    t.deleted_at, t.reminder_enabled, t.recurrence_count
   FROM tasks t
   LEFT JOIN lists l ON l.id = t.list_id
   LEFT JOIN recurrences r ON r.id = t.recurrence_id";
@@ -108,6 +108,7 @@ fn map_task(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         recurrence_id,
         series_id: r.get(12)?,
         parent_task_id: r.get(13)?,
+        recurrence_count: r.get(28)?,
         my_day: r.get(14)?,
         sort_order: r.get(15)?,
         created_at: r.get(16)?,
@@ -283,6 +284,24 @@ fn rule_matches_input(rec: &Recurrence, input: &RecurrenceInput) -> bool {
         && rec.month_day == input.month_day
 }
 
+/// 由初时间点与规则计算第 n 次发生日期（n 从 0 开始）
+fn recurrence_occurrence(rec: &RecurrenceInput, base: &str, n: i64) -> Option<String> {
+    let base = parse_date(base)?;
+    let weekdays: Vec<u32> = rec
+        .weekdays
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect();
+    let rule = Rule::new(
+        &rec.kind,
+        rec.interval.max(1),
+        weekdays,
+        rec.month_day.map(|m| m as u32),
+        base,
+    );
+    rule.nth(n).map(|d| d.format("%Y-%m-%d").to_string())
+}
+
 fn normalize_weekdays(s: &str) -> String {
     let mut v: Vec<i64> = s
         .split(',')
@@ -321,16 +340,21 @@ pub fn create_task(conn: &Connection, input: &TaskInput) -> AppResult<Task> {
     let id = new_id();
     let mut due_date = input.due_date.clone();
     let recurrence_id = if let Some(rec) = input.recurrence.as_ref() {
-        if due_date.is_none() {
-            due_date = Some(crate::domain::today_string());
-        }
-        Some(insert_recurrence(conn, rec, due_date.as_deref().unwrap_or(""))?)
+        let base = due_date.clone().unwrap_or_else(crate::domain::today_string);
+        // 初时间点按规则对齐到首次发生日期
+        due_date = recurrence_occurrence(rec, &base, 0);
+        Some(insert_recurrence(conn, rec, &base)?)
     } else {
         None
     };
     let due_time = input.due_time.clone().filter(|t| !t.trim().is_empty());
-    let reminder_offset = if input.reminder_offset.is_some() { input.reminder_offset } else { None };
     let reminder_enabled = input.reminder_enabled.unwrap_or(false);
+    // 开启提醒时若未选择方案，默认「准时提醒」，保证开关与调度一致
+    let reminder_offset = if reminder_enabled {
+        Some(input.reminder_offset.unwrap_or(0))
+    } else {
+        input.reminder_offset
+    };
     let reminder_at = if reminder_enabled {
         compute_reminder_at(due_date.as_deref(), due_time.as_deref(), reminder_offset)
     } else {
@@ -384,27 +408,62 @@ pub fn update_task(conn: &Connection, id: &str, input: &TaskInput) -> AppResult<
         None => existing.list_id.clone(),
     };
     let note = input.note.clone().unwrap_or_else(|| existing.note.clone());
-    let due_date = input.due_date.clone();
     let due_time = input.due_time.clone().filter(|t| !t.trim().is_empty());
+    let mut due_date = input.due_date.clone();
+    let mut recurrence_count = existing.recurrence_count;
+    // 规则或初时间点变化后，旧周期产生的提醒必须作废
+    let mut reset_notifications = false;
 
     let recurrence_id = match (input.recurrence.as_ref(), existing.recurrence.as_ref()) {
-        (None, _) => None,
-        (Some(rec), Some(old)) if rule_matches_input(old, rec) => Some(old.id.clone()),
+        // 取消重复：保留当前显示的日期，次数清零
+        (None, _) => {
+            recurrence_count = 0;
+            None
+        }
+        // 规则未变：只有初时间点变化时才重置周期
+        (Some(rec), Some(old)) if rule_matches_input(old, rec) => {
+            let new_base = due_date.clone().unwrap_or_else(|| old.base_date.clone());
+            if new_base != old.base_date {
+                conn.execute(
+                    "UPDATE recurrences SET base_date=?1 WHERE id=?2",
+                    params![new_base, old.id],
+                )?;
+                due_date = recurrence_occurrence(rec, &new_base, 0);
+                recurrence_count = 0;
+                reset_notifications = true;
+            } else {
+                due_date = existing.due_date.clone();
+            }
+            Some(old.id.clone())
+        }
+        // 新建或修改重复规则：次数重置为 0，从初时间点重新起算
         (Some(rec), _) => {
             let base = due_date.clone().unwrap_or_else(crate::domain::today_string);
+            due_date = recurrence_occurrence(rec, &base, 0);
+            recurrence_count = 0;
+            reset_notifications = true;
             Some(insert_recurrence(conn, rec, &base)?)
         }
     };
-    let recurrence_changed = recurrence_id != existing.recurrence_id;
 
-    let reminder_offset = input.reminder_offset;
     // 提醒开关未显式传入时保持原值，避免修改其他字段时被默认值覆盖
     let reminder_enabled = input.reminder_enabled.unwrap_or(existing.reminder_enabled);
+    // 开启提醒时若未选择方案，默认「准时提醒」，保证开关与调度一致
+    let reminder_offset = if reminder_enabled {
+        Some(input.reminder_offset.unwrap_or(0))
+    } else {
+        input.reminder_offset
+    };
     let reminder_at = if existing.is_completed || !reminder_enabled {
         None
     } else {
         compute_reminder_at(due_date.as_deref(), due_time.as_deref(), reminder_offset)
     };
+
+    // 关闭提醒、修改规则 / 初时间点或提醒时刻变化时，清除旧的已触发通知
+    if reset_notifications || !reminder_enabled || reminder_at != existing.reminder_at {
+        clear_fired_notifications(conn, id)?;
+    }
 
     // 重要 / 我的一天 与本次编辑的字段相互独立：未显式传入时保持数据库中的原值
     let is_important = input.is_important.unwrap_or(existing.is_important);
@@ -415,8 +474,9 @@ pub fn update_task(conn: &Connection, id: &str, input: &TaskInput) -> AppResult<
 
     conn.execute(
         "UPDATE tasks SET title=?1, list_id=?2, note=?3, is_important=?4, due_date=?5, due_time=?6,
-            reminder_offset=?7, reminder_enabled=?8, reminder_at=?9, recurrence_id=?10, my_day=?11, updated_at=?12
-         WHERE id=?13",
+            reminder_offset=?7, reminder_enabled=?8, reminder_at=?9, recurrence_id=?10, my_day=?11,
+            recurrence_count=?12, updated_at=?13
+         WHERE id=?14",
         params![
             title,
             list_id,
@@ -429,21 +489,11 @@ pub fn update_task(conn: &Connection, id: &str, input: &TaskInput) -> AppResult<
             reminder_at,
             recurrence_id,
             my_day,
+            recurrence_count,
             now_ms(),
             id
         ],
     )?;
-
-    // 修改重复规则时，同步修正后续尚未完成的任务所使用的规则
-    if recurrence_changed {
-        if let (Some(new_rec), Some(series)) = (recurrence_id.as_ref(), existing.series_id.as_ref()) {
-            conn.execute(
-                "UPDATE tasks SET recurrence_id=?1 WHERE series_id=?2 AND id != ?3
-                 AND is_completed=0 AND deleted_at IS NULL",
-                params![new_rec, series, id],
-            )?;
-        }
-    }
 
     if existing.is_completed {
         cancel_schedules(conn, id)?;
@@ -497,10 +547,26 @@ pub fn move_task(conn: &Connection, id: &str, list_id: &str) -> AppResult<Task> 
     Ok(task)
 }
 
-/// 完成 / 取消完成任务。返回自动生成的下一个周期任务（如有）。
+/// 完成 / 取消完成任务。
+/// 重复任务始终是同一条记录：
+/// - 存在待处理（已触发未处理）提醒：完成当前周期，次数与下次时间不变；
+/// - 不存在待处理提醒：推进到下一周期，次数 +1，任务恢复为待完成。
 pub fn complete_task(conn: &Connection, id: &str, completed: bool) -> AppResult<Option<Task>> {
     let task = get_task(conn, id)?;
     if completed {
+        if task.recurrence_id.is_some() {
+            if !task.is_completed && has_fired_notification(conn, id)? {
+                clear_fired_notifications(conn, id)?;
+                conn.execute(
+                    "UPDATE tasks SET is_completed=1, completed_at=?1, reminder_at=NULL, updated_at=?2 WHERE id=?3",
+                    params![now_ms(), now_ms(), id],
+                )?;
+                cancel_schedules(conn, id)?;
+                history::record(conn, id, &task.title, "completed", "重复任务当前周期")?;
+                return Ok(None);
+            }
+            return advance_recurrence(conn, &task).map(Some);
+        }
         if task.is_completed {
             return Ok(None);
         }
@@ -509,20 +575,8 @@ pub fn complete_task(conn: &Connection, id: &str, completed: bool) -> AppResult<
             params![now_ms(), now_ms(), id],
         )?;
         cancel_schedules(conn, id)?;
-        // 重复任务：生成下一个周期
-        let next = if task.recurrence_id.is_some() {
-            generate_next(conn, &task)?
-        } else {
-            None
-        };
-        history::record(
-            conn,
-            id,
-            &task.title,
-            "completed",
-            next.as_ref().map(|t| format!("下一周期: {}", t.due_date.clone().unwrap_or_default())).unwrap_or_default().as_str(),
-        )?;
-        Ok(next)
+        history::record(conn, id, &task.title, "completed", "")?;
+        Ok(None)
     } else {
         if !task.is_completed {
             return Ok(None);
@@ -531,20 +585,21 @@ pub fn complete_task(conn: &Connection, id: &str, completed: bool) -> AppResult<
             "UPDATE tasks SET is_completed=0, completed_at=NULL, updated_at=?1 WHERE id=?2",
             params![now_ms(), id],
         )?;
-        // 撤销完成时，删除自动生成的下一周期任务
-        let mut stmt = conn.prepare(
-            "SELECT id FROM tasks WHERE parent_task_id=?1 AND is_completed=0 AND deleted_at IS NULL",
-        )?;
-        let children: Vec<String> = stmt
-            .query_map([id], |r| r.get(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        drop(stmt);
-        for child in children {
-            conn.execute("UPDATE tasks SET deleted_at=?1 WHERE id=?2", params![now_ms(), child])?;
-            cancel_schedules(conn, &child)?;
-            sync_schedule(conn, &child, None)?;
-        }
-        let at = compute_reminder_at(task.due_date.as_deref(), task.due_time.as_deref(), task.reminder_offset);
+        let at = if task.reminder_enabled {
+            compute_reminder_at(
+                task.due_date.as_deref(),
+                task.due_time.as_deref(),
+                Some(task.reminder_offset.unwrap_or(0)),
+            )
+        } else {
+            None
+        };
+        // 重复任务撤销完成时，不补发已经过去的提醒
+        let at = if task.recurrence_id.is_some() {
+            at.filter(|ms| *ms > now_ms())
+        } else {
+            at
+        };
         conn.execute("UPDATE tasks SET reminder_at=?1 WHERE id=?2", params![at, id])?;
         sync_schedule(conn, id, at)?;
         history::record(conn, id, &task.title, "uncompleted", "")?;
@@ -552,105 +607,26 @@ pub fn complete_task(conn: &Connection, id: &str, completed: bool) -> AppResult<
     }
 }
 
-fn generate_next(conn: &Connection, task: &Task) -> AppResult<Option<Task>> {
-    let rec_id = match task.recurrence_id.as_ref() {
-        Some(r) => r,
-        None => return Ok(None),
-    };
-    let mut stmt = conn.prepare(
-        "SELECT kind, interval, weekdays, month_day, base_date FROM recurrences WHERE id=?1",
-    )?;
-    let rec: Result<(String, i64, String, Option<i64>, String), rusqlite::Error> = stmt.query_row(
-        [rec_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-    );
-    drop(stmt);
-    let (kind, interval, weekdays, month_day, base_date) = rec?;
-    let base = match parse_date(&base_date) {
-        Some(d) => d,
-        None => return err("重复规则基准日期无效"),
-    };
-    let after = task
-        .due_date
-        .as_deref()
-        .and_then(parse_date)
-        .unwrap_or_else(crate::domain::reminder::now_date);
-    let weekdays_vec: Vec<u32> = weekdays
-        .split(',')
-        .filter_map(|s| s.trim().parse::<u32>().ok())
-        .collect();
-    let rule = Rule::new(
-        &kind,
-        interval,
-        weekdays_vec,
-        month_day.map(|m| m as u32),
-        base,
-    );
-    let next_date = match rule.next_after(after) {
-        Some(d) => d.format("%Y-%m-%d").to_string(),
-        None => return Ok(None),
-    };
-
-    // 去重：同一父任务只生成一次
-    let dup: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE parent_task_id=?1 AND deleted_at IS NULL",
-        [&task.id],
+/// 该任务是否存在已触发但尚未处理的提醒
+fn has_fired_notification(conn: &Connection, id: &str) -> AppResult<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM reminder_schedules WHERE task_id=?1 AND status='fired'",
+        [id],
         |r| r.get(0),
     )?;
-    if dup > 0 {
-        return Ok(None);
-    }
-
-    let id = new_id();
-    let reminder_at = if task.reminder_enabled {
-        compute_reminder_at(
-            Some(&next_date),
-            task.due_time.as_deref(),
-            task.reminder_offset,
-        )
-    } else {
-        None
-    };
-    let series_id = task.series_id.clone().unwrap_or_else(|| task.id.clone());
-    conn.execute(
-        "INSERT INTO tasks (id, list_id, title, note, is_important, is_completed, due_date, due_time,
-            reminder_offset, reminder_enabled, reminder_at, recurrence_id, series_id, parent_task_id, my_day,
-            sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, ?14, ?15, ?16)",
-        params![
-            id,
-            task.list_id,
-            task.title,
-            task.note,
-            task.is_important as i64,
-            next_date,
-            task.due_time,
-            task.reminder_offset,
-            task.reminder_enabled as i64,
-            reminder_at,
-            rec_id,
-            series_id,
-            task.id,
-            task.sort_order,
-            now_ms(),
-            now_ms()
-        ],
-    )?;
-    // 复制步骤（未完成状态）
-    for s in &task.steps {
-        conn.execute(
-            "INSERT INTO task_steps (id, task_id, title, is_completed, sort_order) VALUES (?1, ?2, ?3, 0, ?4)",
-            params![new_id(), id, s.title, s.sort_order],
-        )?;
-    }
-    sync_schedule(conn, &id, reminder_at)?;
-    history::record(conn, &id, &task.title, "recurrence_created", &next_date)?;
-    get_task(conn, &id).map(Some)
+    Ok(n > 0)
 }
 
-/// 跳过本次重复：把到期时间推进到下一个周期
-pub fn skip_occurrence(conn: &Connection, id: &str) -> AppResult<Task> {
-    let task = get_task(conn, id)?;
+fn clear_fired_notifications(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM reminder_schedules WHERE task_id=?1 AND status='fired'",
+        [id],
+    )?;
+    Ok(())
+}
+
+/// 推进重复任务到下一周期：更新原记录，绝不复制任务
+fn advance_recurrence(conn: &Connection, task: &Task) -> AppResult<Task> {
     let rec = match task.recurrence.as_ref() {
         Some(r) => r,
         None => return err("该任务不是重复任务"),
@@ -659,35 +635,54 @@ pub fn skip_occurrence(conn: &Connection, id: &str) -> AppResult<Task> {
         Some(d) => d,
         None => return err("重复规则基准日期无效"),
     };
-    let after = task
-        .due_date
-        .as_deref()
-        .and_then(parse_date)
-        .unwrap_or_else(crate::domain::reminder::now_date);
-    let weekdays: Vec<u32> = rec.weekday_numbers();
     let rule = Rule::new(
         &rec.kind,
-        rec.interval,
-        weekdays,
+        rec.interval.max(1),
+        rec.weekday_numbers(),
         rec.month_day.map(|m| m as u32),
         base,
     );
-    let next_date = match rule.next_after(after) {
+    let count = task.recurrence_count + 1;
+    let next_date = match rule.nth(count) {
         Some(d) => d.format("%Y-%m-%d").to_string(),
-        None => return err("无法计算下一次重复日期"),
+        None => {
+            // 没有下一次发生：按普通任务结束
+            clear_fired_notifications(conn, &task.id)?;
+            cancel_schedules(conn, &task.id)?;
+            conn.execute(
+                "UPDATE tasks SET is_completed=1, completed_at=?1, reminder_at=NULL, updated_at=?2 WHERE id=?3",
+                params![now_ms(), now_ms(), task.id],
+            )?;
+            history::record(conn, &task.id, &task.title, "completed", "重复已结束")?;
+            return get_task(conn, &task.id);
+        }
     };
+    clear_fired_notifications(conn, &task.id)?;
+    cancel_schedules(conn, &task.id)?;
     let reminder_at = if task.reminder_enabled {
-        compute_reminder_at(Some(&next_date), task.due_time.as_deref(), task.reminder_offset)
+        compute_reminder_at(
+            Some(&next_date),
+            task.due_time.as_deref(),
+            Some(task.reminder_offset.unwrap_or(0)),
+        )
     } else {
         None
     };
     conn.execute(
-        "UPDATE tasks SET due_date=?1, reminder_at=?2, updated_at=?3 WHERE id=?4",
-        params![next_date, reminder_at, now_ms(), id],
+        "UPDATE tasks SET recurrence_count=?1, due_date=?2, is_completed=0, completed_at=NULL,
+            reminder_at=?3, updated_at=?4
+         WHERE id=?5",
+        params![count, next_date, reminder_at, now_ms(), task.id],
     )?;
-    sync_schedule(conn, id, reminder_at)?;
-    history::record(conn, id, &task.title, "skipped", &next_date)?;
-    get_task(conn, id)
+    sync_schedule(conn, &task.id, reminder_at)?;
+    history::record(
+        conn,
+        &task.id,
+        &task.title,
+        "recurred",
+        &format!("第 {} 次 {}", count, next_date),
+    )?;
+    get_task(conn, &task.id)
 }
 
 /// 删除任务。scope = "single" 或 "series"（整个重复系列）
@@ -724,7 +719,15 @@ pub fn restore_task(conn: &Connection, id: &str) -> AppResult<Task> {
     conn.execute("UPDATE tasks SET deleted_at=NULL, updated_at=?1 WHERE id=?2", params![now_ms(), id])?;
     let task = get_task(conn, id)?;
     if !task.is_completed {
-        let at = compute_reminder_at(task.due_date.as_deref(), task.due_time.as_deref(), task.reminder_offset);
+        let at = if task.reminder_enabled {
+            compute_reminder_at(
+                task.due_date.as_deref(),
+                task.due_time.as_deref(),
+                Some(task.reminder_offset.unwrap_or(0)),
+            )
+        } else {
+            None
+        };
         conn.execute("UPDATE tasks SET reminder_at=?1 WHERE id=?2", params![at, id])?;
         sync_schedule(conn, id, at)?;
     }

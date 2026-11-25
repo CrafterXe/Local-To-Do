@@ -25,6 +25,7 @@ import { ListModal } from "./components/ListModal";
 import { ConfirmModal } from "./components/Modal";
 import { IconBell, IconPlus, IconRefresh } from "./components/Icons";
 import { formatDueLabel, setDisplayTimezone, todayString } from "./utils/date";
+import { DEFAULT_SORT_KIND, DEFAULT_VIEW } from "./utils/defaults";
 import type { SortKind } from "./utils/sort";
 
 type ModalState =
@@ -43,9 +44,9 @@ function viewKey(v: View): string {
 function readSort(key: string): SortKind {
   try {
     const saved = window.localStorage.getItem(`ltd.sort.${key}`);
-    return saved === "name" || saved === "created" || saved === "due" ? saved : null;
+    return saved === "name" || saved === "created" || saved === "due" ? saved : DEFAULT_SORT_KIND;
   } catch {
-    return null;
+    return DEFAULT_SORT_KIND;
   }
 }
 
@@ -58,7 +59,7 @@ export default function App() {
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [nextReminder, setNextReminder] = useState<number | null>(null);
 
-  const [view, setView] = useState<View>({ kind: "myDay" });
+  const [view, setView] = useState<View>(DEFAULT_VIEW);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [deletedLists, setDeletedLists] = useState<DeletedList[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -70,13 +71,14 @@ export default function App() {
   const [toast, setToast] = useState<{ msg: string; error: boolean } | null>(null);
   const [notifiedTasks, setNotifiedTasks] = useState<Task[]>([]);
   const [reminderOpen, setReminderOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<SortKind>(() => readSort("myDay"));
+  const [sortBy, setSortBy] = useState<SortKind>(() => readSort(viewKey(DEFAULT_VIEW)));
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const [tick, setTick] = useState(0);
   const [booted, setBooted] = useState(false);
   const tickRef = useRef(0);
+  const completionLock = useRef<Map<string, number>>(new Map());
 
   const notify = useCallback((msg: string, error = false) => {
     setToast({ msg, error });
@@ -376,16 +378,27 @@ export default function App() {
     [bump, refreshMeta],
   );
 
-  const toggleComplete = async (task: Task) => {
-    try {
-      await api.completeTask(task.id, !task.isCompleted);
-      bump();
-      await refreshMeta();
-      if (selectedId === task.id) await refreshSelected(task.id);
-    } catch (e) {
-      notify(String(e), true);
-    }
-  };
+  // 列表与详情共用同一套完成逻辑
+  const toggleComplete = useCallback(
+    async (task: Task) => {
+      const now = Date.now();
+      const last = completionLock.current.get(task.id) ?? 0;
+      // 快速连点保护：短时间内对同一任务只处理一次
+      if (now - last < 500) return;
+      completionLock.current.set(task.id, now);
+      try {
+        // 重复任务点击只表示「完成当前周期」或「推进下一次」，不会取消完成
+        const completed = task.recurrence ? true : !task.isCompleted;
+        await api.completeTask(task.id, completed);
+        bump();
+        await refreshMeta();
+        if (selectedId === task.id) await refreshSelected(task.id);
+      } catch (e) {
+        notify(String(e), true);
+      }
+    },
+    [bump, notify, refreshMeta, refreshSelected, selectedId],
+  );
 
   const toggleImportant = async (task: Task) => {
     try {
@@ -433,18 +446,6 @@ export default function App() {
     }
   };
 
-  const skipTask = async (task: Task) => {
-    try {
-      const updated = await api.skipOccurrence(task.id);
-      setSelectedTask(updated);
-      bump();
-      await refreshMeta();
-      notify("已跳过本次，到期时间已推进到下一次");
-    } catch (e) {
-      notify(String(e), true);
-    }
-  };
-
   const createNote = async () => {
     try {
       const note = await api.createNote("", "");
@@ -480,7 +481,7 @@ export default function App() {
       const updated = await api.resetSettings();
       setSettings(updated);
       setDisplayTimezone(null);
-      setSortBy(null);
+      setSortBy(DEFAULT_SORT_KIND);
       try {
         Object.keys(window.localStorage)
           .filter((k) => k.startsWith("ltd.sort."))
@@ -735,7 +736,7 @@ export default function App() {
           onClose={closeDetails}
           onSave={saveTask}
           onDelete={requestDelete}
-          onSkip={(t) => void skipTask(t)}
+          onToggleComplete={(t) => void toggleComplete(t)}
           onToggleImportant={(t) => void toggleImportant(t)}
           onToggleMyDay={(t) => void toggleMyDay(t)}
           onRefreshTask={async (t) => {

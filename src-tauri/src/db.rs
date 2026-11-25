@@ -64,7 +64,7 @@ impl Db {
     }
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 fn migrate(conn: &Connection) -> AppResult<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -189,8 +189,107 @@ fn migrate(conn: &Connection) -> AppResult<()> {
             )?;
         }
     }
+    if version < 4 {
+        // v4：重复任务改为单条记录 + 已重复次数
+        let has_column: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'recurrence_count'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_column == 0 {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN recurrence_count INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        consolidate_recurrences(conn)?;
+    }
     if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
+    Ok(())
+}
+
+/// 旧版本通过复制任务实现重复，这里把同一系列的记录合并为一条：
+/// 保留未完成（或日期最新）的一条，其余软删除，并按规则换算已重复次数。
+fn consolidate_recurrences(conn: &Connection) -> AppResult<()> {
+    use crate::domain::recurrence::{parse_date, Rule};
+
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(series_id, id) AS sid, COALESCE(due_date, '') AS due_date,
+                COALESCE(is_completed, 0) AS done, COALESCE(created_at, 0) AS created
+         FROM tasks
+         WHERE recurrence_id IS NOT NULL AND deleted_at IS NULL
+         ORDER BY created ASC",
+    )?;
+    let rows: Vec<(String, String, String, i64, i64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    let mut groups: std::collections::HashMap<String, Vec<(String, String, i64, i64)>> =
+        std::collections::HashMap::new();
+    for (id, sid, due, done, created) in rows {
+        groups
+            .entry(sid)
+            .or_default()
+            .push((id, due, done, created));
+    }
+
+    let now = crate::domain::local_now_ms();
+    for (_sid, group) in groups {
+        if group.len() < 2 {
+            continue;
+        }
+        // 优先保留未完成记录；否则保留到期日期最新的记录
+        let mut keep = group[0].clone();
+        for item in &group {
+            let better = (item.2 == 0 && keep.2 != 0) || (item.2 == keep.2 && item.1 > keep.1);
+            if better {
+                keep = item.clone();
+            }
+        }
+
+        let rec: Option<(String, i64, String, Option<i64>, String)> = conn
+            .query_row(
+                "SELECT kind, interval, weekdays, month_day, base_date FROM recurrences
+                 WHERE id = (SELECT recurrence_id FROM tasks WHERE id=?1)",
+                [&keep.0],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .ok();
+        let mut count = 0i64;
+        let mut due = keep.1.clone();
+        if let Some((kind, interval, weekdays, month_day, base_date)) = rec {
+            if let (Some(base), Some(target)) = (parse_date(&base_date), parse_date(&keep.1)) {
+                let wd: Vec<u32> = weekdays
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<u32>().ok())
+                    .collect();
+                let rule = Rule::new(&kind, interval.max(1), wd, month_day.map(|m| m as u32), base);
+                count = rule.index_of(target);
+                if let Some(d) = rule.nth(count) {
+                    due = d.format("%Y-%m-%d").to_string();
+                }
+            }
+        }
+        conn.execute(
+            "UPDATE tasks SET recurrence_count=?1, due_date=?2 WHERE id=?3",
+            rusqlite::params![count, due, keep.0],
+        )?;
+
+        for item in group {
+            if item.0 == keep.0 {
+                continue;
+            }
+            conn.execute(
+                "UPDATE tasks SET deleted_at=?1 WHERE id=?2",
+                rusqlite::params![now, item.0],
+            )?;
+            conn.execute(
+                "UPDATE reminder_schedules SET status='cancelled' WHERE task_id=?1 AND status='pending'",
+                [&item.0],
+            )?;
+        }
     }
     Ok(())
 }
@@ -228,14 +327,15 @@ pub fn refresh_all_reminders(conn: &Connection) -> AppResult<()> {
     use crate::domain::compute_reminder_at;
     let mut stmt = conn.prepare(
         "SELECT id, due_date, due_time, reminder_offset, reminder_enabled FROM tasks
-         WHERE is_completed = 0 AND deleted_at IS NULL AND reminder_offset IS NOT NULL",
+         WHERE is_completed = 0 AND deleted_at IS NULL",
     )?;
     let rows: Vec<(String, Option<String>, Option<String>, Option<i64>, i64)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
     for (id, date, time, offset, enabled) in rows {
         let at = if enabled != 0 {
-            compute_reminder_at(date.as_deref(), time.as_deref(), offset)
+            // 开关开启但没有历史方案时按「准时提醒」处理
+            compute_reminder_at(date.as_deref(), time.as_deref(), offset.or(Some(0)))
         } else {
             None
         };

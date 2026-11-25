@@ -74,6 +74,8 @@ pub struct Task {
     pub recurrence_id: Option<String>,
     pub series_id: Option<String>,
     pub parent_task_id: Option<String>,
+    /// 重复任务已重复次数（每次推进周期 +1）
+    pub recurrence_count: i64,
     /// 加入「我的一天」的日期 YYYY-MM-DD
     pub my_day: Option<String>,
     pub sort_order: i64,

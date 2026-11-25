@@ -160,15 +160,6 @@ pub fn complete_task(
 }
 
 #[tauri::command]
-pub fn skip_occurrence(state: State<'_, Arc<AppState>>, id: String) -> AppResult<Task> {
-    let conn = state.db.lock();
-    let result = repo::skip_occurrence(&conn, &id);
-    drop(conn);
-    state.notify_scheduler();
-    result
-}
-
-#[tauri::command]
 pub fn delete_task(state: State<'_, Arc<AppState>>, id: String, scope: String) -> AppResult<()> {
     let conn = state.db.lock();
     let result = repo::delete_task(&conn, &id, &scope);

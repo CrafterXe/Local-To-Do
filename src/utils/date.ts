@@ -85,6 +85,23 @@ export function formatDueLabel(date: string | null, time: string | null): string
   return day;
 }
 
+/** 「12月9日 09:00」——重复任务在列表中显示的下次提醒时间 */
+export function formatMonthDayTime(date: string | null, time: string | null): string {
+  if (!date) return "";
+  const d = parseDateString(date);
+  const base = `${d.getMonth() + 1}月${d.getDate()}日`;
+  return time ? `${base} ${time}` : base;
+}
+
+/** 「2026年12月09日 09:00」——重复任务详情中的下次提醒时间 */
+export function formatFullDateTime(date: string | null, time: string | null): string {
+  if (!date) return "";
+  const d = parseDateString(date);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const base = `${d.getFullYear()}年${pad(d.getMonth() + 1)}月${pad(d.getDate())}日`;
+  return time ? `${base} ${time}` : base;
+}
+
 export function formatDueFull(date: string | null, time: string | null): string {
   if (!date) return "";
   const d = parseDateString(date);

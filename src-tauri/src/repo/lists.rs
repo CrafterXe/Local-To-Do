@@ -172,7 +172,7 @@ pub fn restore_list(conn: &Connection, id: &str) -> AppResult<()> {
 
     // 恢复的任务重新计算并注册提醒
     let mut stmt = conn.prepare(
-        "SELECT id, title, is_completed, due_date, due_time, reminder_offset
+        "SELECT id, title, is_completed, due_date, due_time, reminder_offset, reminder_enabled
            FROM tasks WHERE list_id = ?1 AND deleted_at IS NULL",
     )?;
     let rows = stmt.query_map([id], |r| {
@@ -183,14 +183,19 @@ pub fn restore_list(conn: &Connection, id: &str) -> AppResult<()> {
             r.get::<_, Option<String>>(3)?,
             r.get::<_, Option<String>>(4)?,
             r.get::<_, Option<i64>>(5)?,
+            r.get::<_, i64>(6)? != 0,
         ))
     })?;
     let tasks: Vec<_> = rows.collect::<Result<Vec<_>, _>>()?;
-    for (task_id, title, completed, due_date, due_time, offset) in tasks {
+    for (task_id, title, completed, due_date, due_time, offset, enabled) in tasks {
         if completed {
             continue;
         }
-        let at = compute_reminder_at(due_date.as_deref(), due_time.as_deref(), offset);
+        let at = if enabled {
+            compute_reminder_at(due_date.as_deref(), due_time.as_deref(), Some(offset.unwrap_or(0)))
+        } else {
+            None
+        };
         conn.execute(
             "UPDATE tasks SET reminder_at = ?1 WHERE id = ?2",
             params![at, task_id],

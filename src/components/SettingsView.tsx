@@ -78,7 +78,6 @@ export function SettingsView({
   const [busy, setBusy] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [soundOk, setSoundOk] = useState(true);
-  const [tzQuery, setTzQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -96,15 +95,11 @@ export function SettingsView({
   }, [settings.soundPath]);
 
   const timezoneOptions = useMemo(() => {
-    const q = tzQuery.trim().toLowerCase();
-    const base = q
-      ? TIMEZONES.filter((z) => z.toLowerCase().includes(q))
-      : TIMEZONES;
-    if (settings.timezone && !base.includes(settings.timezone)) {
-      return [settings.timezone, ...base];
+    if (settings.timezone && !TIMEZONES.includes(settings.timezone)) {
+      return [settings.timezone, ...TIMEZONES];
     }
-    return base;
-  }, [tzQuery, settings.timezone]);
+    return TIMEZONES;
+  }, [settings.timezone]);
 
   const testNotification = async () => {
     try {
@@ -272,12 +267,6 @@ export function SettingsView({
               <div className="setting-hint">当前：{settings.timezone ?? systemTimeZone()}</div>
             </div>
             <div className="timezone-picker">
-              <input
-                className="input"
-                placeholder="搜索时区"
-                value={tzQuery}
-                onChange={(e) => setTzQuery(e.target.value)}
-              />
               <select
                 className="select"
                 value={settings.timezone ?? systemTimeZone()}

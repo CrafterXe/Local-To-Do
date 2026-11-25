@@ -6,6 +6,8 @@ import {
   diffDays,
   formatDueLabel,
   formatDueFull,
+  formatFullDateTime,
+  formatMonthDayTime,
   formatTimestamp,
   monthGrid,
   parseDateString,
@@ -58,6 +60,18 @@ describe("日期基础函数", () => {
     expect(formatDueLabel(addDays(today, 1), "09:00")).toBe("明天 09:00");
     expect(formatDueLabel(addDays(today, -1), null)).toBe("昨天");
     expect(formatDueLabel(null, "09:00")).toBe("");
+  });
+
+  it("重复任务列表时间格式为「月日 时:分」", () => {
+    expect(formatMonthDayTime("2026-12-09", "09:00")).toBe("12月9日 09:00");
+    expect(formatMonthDayTime("2026-01-05", "18:30")).toBe("1月5日 18:30");
+    expect(formatMonthDayTime(null, "09:00")).toBe("");
+  });
+
+  it("重复任务详情时间格式为「YYYY年MM月DD日 HH:mm」", () => {
+    expect(formatFullDateTime("2026-12-09", "09:00")).toBe("2026年12月09日 09:00");
+    expect(formatFullDateTime("2026-01-05", "18:30")).toBe("2026年01月05日 18:30");
+    expect(formatFullDateTime(null, null)).toBe("");
   });
 });
 

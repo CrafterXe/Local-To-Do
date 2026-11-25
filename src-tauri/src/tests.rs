@@ -172,7 +172,7 @@ fn reminder_schedule_created_updated_and_cancelled() {
 }
 
 #[test]
-fn completing_recurring_task_generates_next_occurrence() {
+fn recurring_task_advances_cycle_without_duplicating() {
     let db = setup();
     let conn = db.lock();
     let task = repo::create_task(
@@ -180,8 +180,6 @@ fn completing_recurring_task_generates_next_occurrence() {
         &TaskInput {
             due_date: Some("2026-01-31".into()),
             due_time: Some("09:00".into()),
-            reminder_offset: Some(0),
-            reminder_enabled: Some(true),
             recurrence: Some(RecurrenceInput {
                 kind: "monthly".into(),
                 interval: 1,
@@ -192,36 +190,34 @@ fn completing_recurring_task_generates_next_occurrence() {
         },
     )
     .unwrap();
-    assert!(task.recurrence_id.is_some());
-    assert!(task.series_id.is_some());
+    assert_eq!(task.due_date.as_deref(), Some("2026-01-31"));
+    assert_eq!(task.recurrence_count, 0);
 
-    let next = repo::complete_task(&conn, &task.id, true).unwrap().unwrap();
-    assert_eq!(next.due_date.as_deref(), Some("2026-02-28"));
-    assert!(!next.is_completed);
-    assert_eq!(next.parent_task_id.as_deref(), Some(task.id.as_str()));
-    assert_eq!(next.recurrence_id, task.recurrence_id.clone());
+    // 无待处理提醒 → 推进周期，仍是同一条记录
+    let first = repo::complete_task(&conn, &task.id, true).unwrap().unwrap();
+    assert_eq!(first.id, task.id);
+    assert_eq!(first.recurrence_count, 1);
+    assert_eq!(first.due_date.as_deref(), Some("2026-02-28"));
+    assert!(!first.is_completed);
 
-    // 撤销完成会移除自动生成的下一周期
-    repo::complete_task(&conn, &task.id, false).unwrap();
-    let children: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE parent_task_id=?1 AND deleted_at IS NULL",
-            [&task.id],
-            |r| r.get(0),
-        )
+    let second = repo::complete_task(&conn, &task.id, true).unwrap().unwrap();
+    assert_eq!(second.recurrence_count, 2);
+    assert_eq!(second.due_date.as_deref(), Some("2026-03-31"));
+
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(children, 0);
+    assert_eq!(total, 1, "重复任务不应复制出新任务");
 }
 
 #[test]
-fn skip_occurrence_moves_due_date_forward() {
+fn weekly_recurrence_uses_weekday_rule() {
     let db = setup();
     let conn = db.lock();
     let task = repo::create_task(
         &conn,
         &TaskInput {
-            due_date: Some("2026-11-18".into()),
-            due_time: Some("20:30".into()),
+            due_date: Some("2026-11-17".into()),
             recurrence: Some(RecurrenceInput {
                 kind: "weekly".into(),
                 interval: 1,
@@ -232,8 +228,287 @@ fn skip_occurrence_moves_due_date_forward() {
         },
     )
     .unwrap();
-    let skipped = repo::skip_occurrence(&conn, &task.id).unwrap();
-    assert_eq!(skipped.due_date.as_deref(), Some("2026-11-20"));
+    // 2026-11-17 是周二 → 首次发生对齐到周三 11-18
+    assert_eq!(task.due_date.as_deref(), Some("2026-11-18"));
+    let t1 = repo::complete_task(&conn, &task.id, true).unwrap().unwrap();
+    assert_eq!(t1.due_date.as_deref(), Some("2026-11-20"));
+    let t2 = repo::complete_task(&conn, &task.id, true).unwrap().unwrap();
+    assert_eq!(t2.due_date.as_deref(), Some("2026-11-23"));
+}
+
+#[test]
+fn completing_recurring_with_fired_notice_finishes_current_cycle() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            reminder_offset: Some(0),
+            reminder_enabled: Some(true),
+            recurrence: Some(RecurrenceInput {
+                kind: "daily".into(),
+                interval: 1,
+                weekdays: String::new(),
+                month_day: None,
+            }),
+            ..make_input(&conn, "晨会")
+        },
+    )
+    .unwrap();
+    insert_fired(&conn, &task.id);
+
+    // 情况 A：存在待处理提醒 → 完成当前周期，次数与时间不变
+    assert!(repo::complete_task(&conn, &task.id, true).unwrap().is_none());
+    let done = repo::get_task(&conn, &task.id).unwrap();
+    assert!(done.is_completed);
+    assert_eq!(done.recurrence_count, 0);
+    assert_eq!(done.due_date.as_deref(), Some("2026-12-09"));
+    let fired: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM reminder_schedules WHERE task_id=?1 AND status='fired'",
+            [&task.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fired, 0, "完成后应清除该任务的通知");
+
+    // 情况 B：再次点击已完成任务 → 推进到下一周期
+    let next = repo::complete_task(&conn, &task.id, true).unwrap().unwrap();
+    assert_eq!(next.id, task.id);
+    assert_eq!(next.recurrence_count, 1);
+    assert_eq!(next.due_date.as_deref(), Some("2026-12-10"));
+    assert!(!next.is_completed);
+}
+
+#[test]
+fn changing_rule_resets_repeat_count_and_recomputes() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            recurrence: Some(RecurrenceInput {
+                kind: "daily".into(),
+                interval: 1,
+                weekdays: String::new(),
+                month_day: None,
+            }),
+            ..make_input(&conn, "巡检")
+        },
+    )
+    .unwrap();
+    let advanced = repo::complete_task(&conn, &task.id, true).unwrap().unwrap();
+    assert_eq!(advanced.recurrence_count, 1);
+    assert_eq!(advanced.due_date.as_deref(), Some("2026-12-10"));
+    // 旧规则已触发但未处理的通知
+    insert_fired(&conn, &task.id);
+
+    let updated = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            recurrence: Some(RecurrenceInput {
+                kind: "weekly".into(),
+                interval: 1,
+                weekdays: "1".into(),
+                month_day: None,
+            }),
+            ..make_input(&conn, "巡检")
+        },
+    )
+    .unwrap();
+    assert_eq!(updated.recurrence_count, 0);
+    assert_eq!(updated.due_date.as_deref(), Some("2026-12-14"));
+    // 修改规则后，旧规则产生的通知应被清除
+    let fired: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM reminder_schedules WHERE task_id=?1 AND status='fired'",
+            [&task.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fired, 0);
+}
+
+#[test]
+fn changing_initial_date_recomputes_next_occurrence() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            recurrence: Some(RecurrenceInput {
+                kind: "daily".into(),
+                interval: 1,
+                weekdays: String::new(),
+                month_day: None,
+            }),
+            ..make_input(&conn, "阅读")
+        },
+    )
+    .unwrap();
+    repo::complete_task(&conn, &task.id, true).unwrap();
+
+    let updated = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-20".into()),
+            recurrence: Some(RecurrenceInput {
+                kind: "daily".into(),
+                interval: 1,
+                weekdays: String::new(),
+                month_day: None,
+            }),
+            ..make_input(&conn, "阅读")
+        },
+    )
+    .unwrap();
+    assert_eq!(updated.recurrence_count, 0);
+    assert_eq!(updated.due_date.as_deref(), Some("2026-12-20"));
+}
+
+#[test]
+fn reminder_switch_keeps_scheme_and_schedule() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            ..make_input(&conn, "提醒开关")
+        },
+    )
+    .unwrap();
+    assert!(!task.reminder_enabled);
+    assert!(task.reminder_at.is_none());
+
+    // 开启提醒 → 按方案建立调度
+    let on = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            reminder_offset: Some(60),
+            reminder_enabled: Some(true),
+            ..make_input(&conn, "提醒开关")
+        },
+    )
+    .unwrap();
+    assert!(on.reminder_enabled);
+    assert!(on.reminder_at.is_some());
+    assert_eq!(pending_count(&conn), 1);
+
+    // 关闭提醒 → 取消调度但保留方案
+    let off = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            reminder_offset: Some(60),
+            reminder_enabled: Some(false),
+            ..make_input(&conn, "提醒开关")
+        },
+    )
+    .unwrap();
+    assert!(!off.reminder_enabled);
+    assert!(off.reminder_at.is_none());
+    assert_eq!(off.reminder_offset, Some(60));
+    assert_eq!(pending_count(&conn), 0);
+
+    // 重新开启 → 使用原方案恢复调度
+    let again = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            reminder_offset: Some(60),
+            reminder_enabled: Some(true),
+            ..make_input(&conn, "提醒开关")
+        },
+    )
+    .unwrap();
+    assert!(again.reminder_enabled);
+    assert_eq!(again.reminder_at, on.reminder_at);
+    assert_eq!(pending_count(&conn), 1);
+}
+
+#[test]
+fn enabling_reminder_without_scheme_defaults_to_on_time() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            ..make_input(&conn, "无方案")
+        },
+    )
+    .unwrap();
+    assert!(task.reminder_offset.is_none());
+
+    // 打开开关但不指定方案 → 默认准时提醒并建立调度
+    let on = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            reminder_offset: None,
+            reminder_enabled: Some(true),
+            ..make_input(&conn, "无方案")
+        },
+    )
+    .unwrap();
+    assert_eq!(on.reminder_offset, Some(0));
+    let expected = domain::compute_reminder_at(Some("2026-12-09"), Some("09:00"), Some(0));
+    assert_eq!(on.reminder_at, expected);
+    assert_eq!(pending_count(&conn), 1);
+
+    // 关闭开关时清除已触发通知，任务从提醒栏移除
+    insert_fired(&conn, &task.id);
+    let off = repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-09".into()),
+            due_time: Some("09:00".into()),
+            reminder_offset: Some(0),
+            reminder_enabled: Some(false),
+            ..make_input(&conn, "无方案")
+        },
+    )
+    .unwrap();
+    assert!(!off.reminder_enabled);
+    assert!(off.reminder_at.is_none());
+    let fired: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM reminder_schedules WHERE task_id=?1 AND status='fired'",
+            [&task.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fired, 0);
+}
+
+fn insert_fired(conn: &Connection, task_id: &str) {
+    let now = domain::local_now_ms();
+    conn.execute(
+        "INSERT INTO reminder_schedules (id, task_id, trigger_at, status, fired_at, created_at)
+         VALUES (?1, ?2, ?3, 'fired', ?4, ?4)",
+        rusqlite::params![format!("fired-{task_id}"), task_id, now - 1000, now],
+    )
+    .unwrap();
 }
 
 #[test]
@@ -387,7 +662,7 @@ fn migration_from_v1_adds_list_deleted_at() {
     let db = Db::open(&path).unwrap();
     let conn = db.lock();
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let has_col: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('lists') WHERE name='deleted_at'",

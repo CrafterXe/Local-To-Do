@@ -129,7 +129,6 @@ pub fn run() {
             commands::set_my_day,
             commands::move_task,
             commands::complete_task,
-            commands::skip_occurrence,
             commands::delete_task,
             commands::restore_task,
             commands::purge_task,

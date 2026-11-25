@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DeletedList, Task, View } from "../api";
-import { formatDueLabel, formatTimestamp, todayString } from "../utils/date";
+import { formatDueLabel, formatMonthDayTime, formatTimestamp, todayString } from "../utils/date";
 import { sortTasks, type SortKind } from "../utils/sort";
 import {
   IconCheck,
@@ -239,7 +239,9 @@ export function TaskList({
                         <rect x="3.5" y="5" width="17" height="16" rx="2.5" />
                         <path d="M3.5 9.5h17M8 3v4M16 3v4" />
                       </svg>
-                      {formatDueLabel(t.dueDate, t.dueTime)}
+                      {t.recurrence
+                        ? formatMonthDayTime(t.dueDate, t.dueTime)
+                        : formatDueLabel(t.dueDate, t.dueTime)}
                     </span>
                   )}
                   {t.recurrence && (

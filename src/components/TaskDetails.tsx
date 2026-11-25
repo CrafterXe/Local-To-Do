@@ -3,6 +3,7 @@ import { api, type RecurrenceInput, type Task, type TaskInput, type TaskList } f
 import {
   combineReminderOffset,
   formatDueFull,
+  formatFullDateTime,
   formatTimestamp,
   monthGrid,
   recurrenceLabel,
@@ -44,7 +45,8 @@ function fromTask(t: Task): Draft {
   return {
     title: t.title,
     note: t.note,
-    dueDate: t.dueDate,
+    // 重复任务编辑的是「初时间点」，当前周期日期由底层根据次数计算
+    dueDate: t.recurrence ? t.recurrence.baseDate : t.dueDate,
     dueTime: t.dueTime,
     reminderOffset: t.reminderOffset,
     reminderEnabled: t.reminderEnabled,
@@ -80,7 +82,7 @@ interface Props {
   onClose: () => void;
   onSave: (id: string, input: TaskInput) => Promise<void>;
   onDelete: (task: Task, scope: "single" | "series") => void;
-  onSkip: (task: Task) => void;
+  onToggleComplete: (task: Task) => void;
   onToggleImportant: (task: Task) => void;
   onToggleMyDay: (task: Task) => void;
   onRefreshTask: (task: Task) => void;
@@ -95,7 +97,7 @@ export function TaskDetails({
   onClose,
   onSave,
   onDelete,
-  onSkip,
+  onToggleComplete,
   onToggleImportant,
   onToggleMyDay,
   onRefreshTask,
@@ -150,12 +152,33 @@ export function TaskDetails({
     setPop(null);
   };
 
-  const applyReminder = (offset: number | null) => {
-    if (offset !== null && !draft.dueDate) {
+  const applyReminder = (offset: number) => {
+    if (!draft.dueDate) {
       const today = todayString();
       update({ dueDate: today, dueTime: draft.dueTime ?? "09:00", reminderOffset: offset });
     } else {
       update({ reminderOffset: offset });
+    }
+    setPop(null);
+  };
+
+  const toggleReminder = () => {
+    if (draft.reminderEnabled) {
+      // 关闭提醒：保留已选方案，仅取消开关与调度
+      update({ reminderEnabled: false });
+    } else {
+      // 开启提醒：没有历史方案时默认「准时提醒」
+      const offset = draft.reminderOffset ?? 0;
+      if (!draft.dueDate) {
+        update({
+          dueDate: todayString(),
+          dueTime: draft.dueTime ?? "09:00",
+          reminderEnabled: true,
+          reminderOffset: offset,
+        });
+      } else {
+        update({ reminderEnabled: true, reminderOffset: offset });
+      }
     }
     setPop(null);
   };
@@ -219,15 +242,14 @@ export function TaskDetails({
           <button
             className={`check ${task.isCompleted ? "checked" : ""}`}
             style={{ marginTop: 6 }}
-            title={task.isCompleted ? "恢复为未完成" : "标记完成"}
-            onClick={async () => {
-              try {
-                await api.completeTask(task.id, !task.isCompleted);
-                onRefreshTask(await api.getTask(task.id));
-              } catch (e) {
-                notify(String(e), true);
-              }
-            }}
+            title={
+              task.recurrence
+                ? "完成当前周期或推进到下一次"
+                : task.isCompleted
+                  ? "恢复为未完成"
+                  : "标记完成"
+            }
+            onClick={() => onToggleComplete(task)}
           >
             <IconCheck size={12} />
           </button>
@@ -301,7 +323,7 @@ export function TaskDetails({
         <div className="detail-rows">
           <button className="detail-row" onClick={open("due")}>
             <span className="row-icon on"><IconCalendar size={16} /></span>
-            <span className="row-label">到期日期</span>
+            <span className="row-label">{task.recurrence ? "初时间点" : "到期日期"}</span>
             <span className="row-value">
               <span>{draft.dueDate ? formatDueFull(draft.dueDate, draft.dueTime) : "无"}</span>
               <IconChevronDown size={13} />
@@ -320,24 +342,19 @@ export function TaskDetails({
               }
             }}
           >
-            <span
-              className={`row-icon ${
-                draft.reminderEnabled && draft.reminderOffset !== null ? "on" : ""
-              }`}
-            >
+            <span className={`row-icon ${draft.reminderEnabled ? "on" : ""}`}>
               <IconBell size={16} />
             </span>
             <span className="row-label">提醒</span>
             <span className="row-value">
-              <span>{reminderLabel(draft.reminderOffset)}</span>
+              <span>{reminderLabel(draft.reminderEnabled ? draft.reminderOffset ?? 0 : null)}</span>
               <button
                 className={`switch small ${draft.reminderEnabled ? "on" : ""}`}
                 title={draft.reminderEnabled ? "关闭该任务的提醒" : "开启该任务的提醒"}
                 aria-pressed={draft.reminderEnabled}
                 onClick={(e) => {
                   e.stopPropagation();
-                  update({ reminderEnabled: !draft.reminderEnabled });
-                  setPop(null);
+                  toggleReminder();
                 }}
               />
               {draft.reminderEnabled && <IconChevronDown size={13} />}
@@ -398,18 +415,19 @@ export function TaskDetails({
           />
         </div>
 
+        {task.recurrence && (
+          <div className="detail-recur-info">
+            <div>下次提醒：{formatFullDateTime(task.dueDate, task.dueTime)}</div>
+            <div>已重复：{task.recurrenceCount}</div>
+          </div>
+        )}
+
         <div className="detail-footer">
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             <button className="text-btn danger" onClick={() => onDelete(task, "single")}>
               <IconTrash size={14} />
               删除任务
             </button>
-            {task.recurrence && (
-              <button className="text-btn" onClick={() => onSkip(task)}>
-                <IconRepeat size={14} />
-                跳过本次
-              </button>
-            )}
           </div>
           <span style={{ fontSize: 11, color: "var(--muted-2)" }}>
             {task.createdAt ? `创建于 ${formatTimestamp(task.createdAt)}` : ""}
@@ -596,8 +614,7 @@ function CalendarPanel({
   );
 }
 
-const REMINDER_PRESETS: { label: string; value: number | null }[] = [
-  { label: "不提醒", value: null },
+const REMINDER_PRESETS: { label: string; value: number }[] = [
   { label: "准时提醒", value: 0 },
   { label: "提前 20 分钟", value: 20 },
   { label: "提前 1 小时", value: 60 },
@@ -616,12 +633,12 @@ function ReminderPanel({
 }: {
   current: number | null;
   hasDue: boolean;
-  onApply: (offset: number | null) => void;
+  onApply: (offset: number) => void;
   onCancel: () => void;
 }) {
   const isCustom = current !== null && !isPresetReminder(current);
   const [customOpen, setCustomOpen] = useState(isCustom);
-  const [pending, setPending] = useState<number | null>(current);
+  const [pending, setPending] = useState<number>(current ?? 0);
   const init = splitReminderOffset(current ?? 0);
   const [days, setDays] = useState(String(init.days));
   const [hours, setHours] = useState(String(init.hours));

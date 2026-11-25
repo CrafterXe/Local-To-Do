@@ -817,6 +817,16 @@ select {
   border-color: var(--accent);
 }
 
+/* 重复任务详情中的辅助信息：下次提醒 / 已重复 */
+.detail-recur-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .detail-footer {
   display: flex;
   align-items: center;
