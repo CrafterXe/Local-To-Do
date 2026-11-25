@@ -160,19 +160,19 @@ export function Sidebar({
           <span className="nav-text">重要</span>
           {counts && counts.important > 0 && <span className="nav-count">{counts.important}</span>}
         </button>
-        <button className={`nav-item ${is("completed") ? "active" : ""}`} onClick={() => onSelect({ kind: "completed" })}>
-          <span className="nav-icon"><IconCheckCircle size={17} /></span>
-          <span className="nav-text">已完成</span>
-          {counts && counts.completed > 0 && <span className="nav-count">{counts.completed}</span>}
+        <button className={`nav-item ${is("planned") ? "active" : ""}`} onClick={() => onSelect({ kind: "planned" })}>
+          <span className="nav-icon"><IconCalendar size={17} /></span>
+          <span className="nav-text">计划内</span>
+          {counts && counts.planned > 0 && <span className="nav-count">{counts.planned}</span>}
         </button>
         <button className={`nav-item ${is("calendar") ? "active" : ""}`} onClick={() => onSelect({ kind: "calendar" })}>
           <span className="nav-icon"><IconCalendar size={17} /></span>
           <span className="nav-text">日历</span>
         </button>
-        <button className={`nav-item ${is("planned") ? "active" : ""}`} onClick={() => onSelect({ kind: "planned" })}>
-          <span className="nav-icon"><IconCalendar size={17} /></span>
-          <span className="nav-text">计划内</span>
-          {counts && counts.planned > 0 && <span className="nav-count">{counts.planned}</span>}
+        <button className={`nav-item ${is("completed") ? "active" : ""}`} onClick={() => onSelect({ kind: "completed" })}>
+          <span className="nav-icon"><IconCheckCircle size={17} /></span>
+          <span className="nav-text">已完成</span>
+          {counts && counts.completed > 0 && <span className="nav-count">{counts.completed}</span>}
         </button>
 
         <div className="nav-group-title">
