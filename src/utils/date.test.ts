@@ -7,7 +7,7 @@ import {
   formatDueLabel,
   formatDueFull,
   formatFullDateTime,
-  formatMonthDayTime,
+  formatTaskListDue,
   formatTimestamp,
   monthGrid,
   parseDateString,
@@ -62,16 +62,53 @@ describe("日期基础函数", () => {
     expect(formatDueLabel(null, "09:00")).toBe("");
   });
 
-  it("重复任务列表时间格式为「月日 时:分」", () => {
-    expect(formatMonthDayTime("2026-12-09", "09:00")).toBe("12月9日 09:00");
-    expect(formatMonthDayTime("2026-01-05", "18:30")).toBe("1月5日 18:30");
-    expect(formatMonthDayTime(null, "09:00")).toBe("");
-  });
-
   it("重复任务详情时间格式为「YYYY年MM月DD日 HH:mm」", () => {
     expect(formatFullDateTime("2026-12-09", "09:00")).toBe("2026年12月09日 09:00");
     expect(formatFullDateTime("2026-01-05", "18:30")).toBe("2026年01月05日 18:30");
     expect(formatFullDateTime(null, null)).toBe("");
+  });
+});
+
+describe("任务列表统一日期格式", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    setDisplayTimezone(null);
+  });
+
+  it("以 2026-11-25 为基准：明天/后天/其他日期使用同一格式", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-25T02:00:00Z")); // 上海 11-25 10:00
+    setDisplayTimezone("Asia/Shanghai");
+    expect(formatTaskListDue("2026-11-26", "09:00")).toBe("明天 09:00");
+    expect(formatTaskListDue("2026-11-27", "14:30")).toBe("后天 14:30");
+    expect(formatTaskListDue("2026-11-28", "09:00")).toBe("11月28日 09:00");
+    expect(formatTaskListDue("2026-12-02", "08:00")).toBe("12月2日 08:00");
+    expect(formatTaskListDue("2027-01-05", "16:20")).toBe("1月5日 16:20");
+    // 今天不属于“明天/后天”，统一显示月日
+    expect(formatTaskListDue("2026-11-25", "09:00")).toBe("11月25日 09:00");
+    expect(formatTaskListDue(null, "09:00")).toBe("");
+  });
+
+  it("跨月、跨年按自然日计算而不是固定小时差", () => {
+    vi.useFakeTimers();
+    setDisplayTimezone("Asia/Shanghai");
+    vi.setSystemTime(new Date("2026-12-31T09:00:00+08:00"));
+    expect(formatTaskListDue("2027-01-01", "08:00")).toBe("明天 08:00");
+    vi.setSystemTime(new Date("2026-11-30T23:50:00+08:00"));
+    expect(formatTaskListDue("2026-12-01", "00:10")).toBe("明天 00:10");
+    expect(formatTaskListDue("2027-01-01", "00:00")).toBe("1月1日 00:00");
+  });
+
+  it("按用户当前时区判断今天，避免跨时区日期偏移", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-25T16:30:00Z")); // UTC 11-25 / 上海 11-26
+    setDisplayTimezone("UTC");
+    expect(todayString()).toBe("2026-11-25");
+    expect(formatTaskListDue("2026-11-26", "09:00")).toBe("明天 09:00");
+    setDisplayTimezone("Asia/Shanghai");
+    expect(todayString()).toBe("2026-11-26");
+    expect(formatTaskListDue("2026-11-27", "09:00")).toBe("明天 09:00");
+    expect(formatTaskListDue("2026-11-26", "09:00")).toBe("11月26日 09:00");
   });
 });
 

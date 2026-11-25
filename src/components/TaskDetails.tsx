@@ -417,7 +417,7 @@ export function TaskDetails({
 
         {task.recurrence && (
           <div className="detail-recur-info">
-            <div>下次提醒：{formatFullDateTime(task.dueDate, task.dueTime)}</div>
+            <div>下次日期：{formatFullDateTime(task.dueDate, task.dueTime)}</div>
             <div>已重复：{task.recurrenceCount}</div>
           </div>
         )}

@@ -314,9 +314,9 @@ export default function App() {
   const jumpToNotified = (task: Task) => {
     setReminderOpen(false);
     setSearch("");
-    setSelectedId(null);
-    setSelectedTask(null);
     setView({ kind: "all" });
+    // 选中任务并打开右侧详情，确保跳转落到具体任务而不是只切换列表
+    void selectTask(task.id);
     setFocusTaskId(task.id);
   };
 
@@ -628,7 +628,9 @@ export default function App() {
                   : undefined
               }
               onClick={() => {
+                // 单条提醒直接跳转；多条提醒先展开列表，再点击具体条目跳转
                 if (notifiedTasks.length > 1) setReminderOpen((v) => !v);
+                else jumpToNotified(notifiedTasks[0]);
               }}
             >
               <span className="reminder-icon">
