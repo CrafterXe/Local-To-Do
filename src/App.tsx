@@ -330,7 +330,14 @@ export default function App() {
     [selectedId],
   );
 
+  const goToCurrentMonth = () => {
+    const d = parseDateString(todayString());
+    setCalendarMonth({ year: d.getFullYear(), month: d.getMonth() });
+  };
+
   const selectView = (v: View) => {
+    // 从其他界面进入日历时重新定位到当月；日历内手动浏览不受影响
+    if (v.kind === "calendar" && view.kind !== "calendar") goToCurrentMonth();
     setView(v);
     setSearch("");
     setSelectedId(null);
@@ -721,6 +728,8 @@ export default function App() {
                 className="icon-btn"
                 title="刷新"
                 onClick={() => {
+                  // 日历中的刷新同时回到当前月份
+                  if (view.kind === "calendar") goToCurrentMonth();
                   bump();
                   void refreshMeta();
                   void loadSystemInfo();
