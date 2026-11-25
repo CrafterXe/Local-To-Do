@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::backup::{self, RestoreReport};
 use crate::state::AppState;
 use ltd_core::db::{self, DbStats};
-use ltd_core::error::{err, AppError, AppResult};
+use ltd_core::error::{err, AppResult};
 use ltd_core::models::{
     AppInfo, AppSettings, BackupEntry, DeletedList, HistoryEntry, Note, Task, TaskList, TaskQuery,
 };
@@ -371,6 +371,7 @@ pub fn resync_reminders(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(desktop)]
 fn apply_autostart(app: &AppHandle, enabled: bool) {
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
@@ -385,6 +386,9 @@ fn apply_autostart(app: &AppHandle, enabled: bool) {
         }
     }
 }
+
+#[cfg(not(desktop))]
+fn apply_autostart(_app: &AppHandle, _enabled: bool) {}
 
 #[tauri::command]
 pub fn get_app_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppResult<AppInfo> {

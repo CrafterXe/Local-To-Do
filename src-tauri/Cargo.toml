@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 ltd-core = { path = "../crates/ltd-core" }
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
@@ -32,6 +32,10 @@ chrono-tz = { version = "0.10.4", features = ["serde"] }
 
 [dev-dependencies]
 ltd-core = { path = "../crates/ltd-core", features = ["test-utils"] }
+
+# 托盘等桌面能力仅在 Windows/macOS/Linux 启用，Android 上不编译相关特性
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_System_Registry", "Win32_Foundation", "Win32_Security", "Win32_Media_Audio"] }

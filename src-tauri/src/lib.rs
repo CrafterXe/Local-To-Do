@@ -11,15 +11,24 @@ mod tests;
 use std::sync::Arc;
 
 use ltd_core::db;
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+#[cfg(desktop)]
+use tauri::{AppHandle, Emitter};
+use tauri::Manager;
+#[cfg(desktop)]
+use tauri::WindowEvent;
+#[cfg(desktop)]
 use tauri_plugin_window_state::StateFlags;
 
 use state::AppState;
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
@@ -28,11 +37,13 @@ pub fn run() {
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--autostart"]),
-        ))
+        ));
+
+    builder
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -48,16 +59,20 @@ pub fn run() {
 
             // 同步开机自启的真实状态（用户可能在系统设置里改过）
             {
-                use tauri_plugin_autostart::ManagerExt;
+                #[allow(unused_mut)]
                 let mut settings = {
                     let conn = state.db.lock();
                     db::load_settings(&conn)?
                 };
-                if let Ok(enabled) = app.autolaunch().is_enabled() {
-                    if settings.autostart != enabled {
-                        settings.autostart = enabled;
-                        let conn = state.db.lock();
-                        db::save_settings(&conn, &settings)?;
+                #[cfg(desktop)]
+                {
+                    use tauri_plugin_autostart::ManagerExt;
+                    if let Ok(enabled) = app.autolaunch().is_enabled() {
+                        if settings.autostart != enabled {
+                            settings.autostart = enabled;
+                            let conn = state.db.lock();
+                            db::save_settings(&conn, &settings)?;
+                        }
                     }
                 }
                 if let Some(w) = app.get_webview_window("main") {
@@ -68,10 +83,13 @@ pub fn run() {
                     };
                     let _ = w.set_theme(Some(theme));
                 }
-                let launched_by_autostart = std::env::args().any(|a| a == "--autostart");
-                if launched_by_autostart && settings.start_minimized {
-                    if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.hide();
+                #[cfg(desktop)]
+                {
+                    let launched_by_autostart = std::env::args().any(|a| a == "--autostart");
+                    if launched_by_autostart && settings.start_minimized {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.hide();
+                        }
                     }
                 }
             }
@@ -79,6 +97,7 @@ pub fn run() {
             #[cfg(windows)]
             ensure_notification_identity();
 
+            #[cfg(desktop)]
             setup_tray(app.handle())?;
             scheduler::spawn(app.handle().clone(), state.clone());
             logging::info(format!(
@@ -88,9 +107,10 @@ pub fn run() {
             ));
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                let app = window.app_handle();
+        .on_window_event(|_window, _event| {
+            #[cfg(desktop)]
+            if let WindowEvent::CloseRequested { api, .. } = _event {
+                let app = _window.app_handle();
                 let state = app.state::<Arc<AppState>>();
                 let close_to_tray = {
                     let conn = state.db.lock();
@@ -100,7 +120,7 @@ pub fn run() {
                 };
                 if close_to_tray {
                     api.prevent_close();
-                    let _ = window.hide();
+                    let _ = _window.hide();
                     logging::info("窗口已隐藏到系统托盘（提醒调度继续运行）");
                 } else {
                     logging::info("用户关闭应用窗口，应用即将退出");
@@ -166,6 +186,7 @@ pub fn run() {
         .expect("Local To Do 启动失败");
 }
 
+#[cfg(desktop)]
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -220,6 +241,7 @@ fn ensure_notification_identity() {
     }
 }
 
+#[cfg(desktop)]
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "打开 Local To Do", true, None::<&str>)?;
     let new_task = MenuItem::with_id(app, "new_task", "新建任务", true, None::<&str>)?;
