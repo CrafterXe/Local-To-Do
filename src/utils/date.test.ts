@@ -8,9 +8,11 @@ import {
   formatDueLabel,
   formatDueFull,
   formatFullDateTime,
+  formatDayTitle,
   formatTaskListDue,
   formatTimestamp,
   monthGrid,
+  monthTitle,
   parseDateString,
   recurrenceLabel,
   reminderLabel,
@@ -263,5 +265,21 @@ describe("周数计算（周一为一周开始）", () => {
     // 显式传 baseDate 应与 null 等价（同一天）
     expect(currentWeekNumber(null)).toBe(weekNumberByBase(todayString(), "2026-01-01"));
     vi.useRealTimers();
+  });
+});
+
+describe("月历与单日标题", () => {
+  it("月份标题与日期标题", () => {
+    expect(monthTitle(2026, 11)).toBe("2026年12月");
+    expect(monthTitle(2027, 0)).toBe("2027年1月");
+    expect(formatDayTitle("2026-12-08")).toBe("2026年12月8日");
+    expect(formatDayTitle("2026-01-01")).toBe("2026年1月1日");
+  });
+
+  it("月份网格跨年时保持连续 42 天", () => {
+    const cells = monthGrid(2026, 11); // 2026 年 12 月
+    expect(cells).toHaveLength(42);
+    expect(cells[0]).toBe("2026-11-30");
+    expect(cells[41]).toBe("2027-01-10");
   });
 });

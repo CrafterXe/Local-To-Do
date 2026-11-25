@@ -54,11 +54,15 @@ export function addDays(s: string, days: number): string {
   return toDateString(d);
 }
 
+/** 自然日的 UTC 序列值：避免夏令时导致的 23/25 小时偏差 */
+function daySerial(s: string): number {
+  const d = parseDateString(s);
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 /** 两个日期相差的天数（b - a） */
 export function diffDays(a: string, b: string): number {
-  const da = parseDateString(a).getTime();
-  const db = parseDateString(b).getTime();
-  return Math.round((db - da) / 86_400_000);
+  return Math.round((daySerial(b) - daySerial(a)) / 86_400_000);
 }
 
 export function weekdayIndex(s: string): number {
@@ -238,10 +242,23 @@ function weekMonday(dateStr: string): Date {
  * 输入日期格式 YYYY-MM-DD，返回整数，可正可负（current 在 base 之前时为 0 或负数）。
  */
 export function weekNumberByBase(currentDate: string, baseDate: string): number {
-  const cur = weekMonday(currentDate).getTime();
-  const base = weekMonday(baseDate).getTime();
-  const weeksDiff = Math.round((cur - base) / (7 * 86_400_000));
+  const cur = weekMonday(currentDate);
+  const base = weekMonday(baseDate);
+  const curSerial = Date.UTC(cur.getFullYear(), cur.getMonth(), cur.getDate());
+  const baseSerial = Date.UTC(base.getFullYear(), base.getMonth(), base.getDate());
+  const weeksDiff = Math.round((curSerial - baseSerial) / (7 * 86_400_000));
   return weeksDiff + 1;
+}
+
+/** 「2026年12月」 */
+export function monthTitle(year: number, month: number): string {
+  return `${year}年${month + 1}月`;
+}
+
+/** 「2026年12月8日」——单日任务视图标题 */
+export function formatDayTitle(date: string): string {
+  const d = parseDateString(date);
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 /** 当年 1 月 1 日（用于默认周数基准） */

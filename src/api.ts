@@ -119,6 +119,15 @@ export interface HistoryEntry {
   at: number;
 }
 
+/** 月历中某一天的任务统计（仅用于展示） */
+export interface CalendarDay {
+  date: string;
+  total: number;
+  nonRepeat: number;
+  repeat: number;
+  hasImportant: boolean;
+}
+
 export interface SidebarCounts {
   myDay: number;
   important: number;
@@ -174,11 +183,15 @@ export type ViewKind =
   | "notes"
   | "settings"
   | "history"
+  | "calendar"
+  | "day"
   | "list";
 
 export interface View {
   kind: ViewKind;
   listId?: string;
+  /** 单日任务视图对应的日期 YYYY-MM-DD */
+  date?: string;
 }
 
 export const api = {
@@ -200,6 +213,9 @@ export const api = {
     search?: string | null;
     includeCompleted?: boolean | null;
   }) => invoke<Task[]>("list_tasks", { query }),
+  calendarMonth: (start: string, end: string) =>
+    invoke<CalendarDay[]>("calendar_month", { start, end }),
+  listTasksForDay: (date: string) => invoke<Task[]>("list_tasks_for_day", { date }),
   listNotifiedTasks: () => invoke<Task[]>("list_notified_tasks"),
   getTask: (id: string) => invoke<Task>("get_task", { id }),
   createTask: (input: TaskInput) => invoke<Task>("create_task", { input }),

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { SidebarCounts, TaskList, View } from "../api";
-import { toDateString } from "../utils/date";
+import { WeekPicker } from "./WeekPicker";
 import {
   IconAll,
   IconCalendar,
@@ -29,6 +29,7 @@ interface Props {
   onManageList: (l: TaskList) => void;
   onReorderLists: (ids: string[]) => void;
   weekLabel: string;
+  weekBaseDate: string | null;
   onSetWeekBase: (date: string) => void;
 }
 
@@ -43,6 +44,7 @@ export function Sidebar({
   onManageList,
   onReorderLists,
   weekLabel,
+  weekBaseDate,
   onSetWeekBase,
 }: Props) {
   const is = (kind: string, listId?: string) =>
@@ -53,9 +55,6 @@ export function Sidebar({
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const dropRef = useRef<{ id: string; after: boolean } | null>(null);
   const didDragRef = useRef(false);
-
-  const [weekEditing, setWeekEditing] = useState(false);
-  const weekPickerRef = useRef<HTMLInputElement>(null);
 
   const startDrag = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0) return;
@@ -133,38 +132,7 @@ export function Sidebar({
         <div className="brand">
           <div className="brand-name">Local To Do</div>
         </div>
-        <div className="sidebar-week-wrap">
-          <button
-            type="button"
-            className="sidebar-week-label"
-            title="点击设置第一周基准日期"
-            onClick={() => {
-              setWeekEditing(true);
-              requestAnimationFrame(() => {
-                const el = weekPickerRef.current;
-                el?.focus();
-                // 尝试触发原生日历弹窗（Chrome/Edge 支持 showPicker）
-                try { (el as any)?.showPicker?.(); } catch { /* ignore */ }
-              });
-            }}
-          >
-            {weekLabel}
-          </button>
-          {weekEditing && (
-            <input
-              ref={weekPickerRef}
-              type="date"
-              className="sidebar-week-picker"
-              defaultValue={toDateString(new Date())}
-              onChange={(e) => {
-                const v = e.target.value;
-                setWeekEditing(false);
-                if (v) onSetWeekBase(v);
-              }}
-              onBlur={() => setWeekEditing(false)}
-            />
-          )}
-        </div>
+        <WeekPicker label={weekLabel} anchorDate={weekBaseDate} onSelect={onSetWeekBase} />
       </div>
 
       <div className="search-box">
@@ -192,15 +160,19 @@ export function Sidebar({
           <span className="nav-text">重要</span>
           {counts && counts.important > 0 && <span className="nav-count">{counts.important}</span>}
         </button>
-        <button className={`nav-item ${is("planned") ? "active" : ""}`} onClick={() => onSelect({ kind: "planned" })}>
-          <span className="nav-icon"><IconCalendar size={17} /></span>
-          <span className="nav-text">计划内</span>
-          {counts && counts.planned > 0 && <span className="nav-count">{counts.planned}</span>}
-        </button>
         <button className={`nav-item ${is("completed") ? "active" : ""}`} onClick={() => onSelect({ kind: "completed" })}>
           <span className="nav-icon"><IconCheckCircle size={17} /></span>
           <span className="nav-text">已完成</span>
           {counts && counts.completed > 0 && <span className="nav-count">{counts.completed}</span>}
+        </button>
+        <button className={`nav-item ${is("calendar") ? "active" : ""}`} onClick={() => onSelect({ kind: "calendar" })}>
+          <span className="nav-icon"><IconCalendar size={17} /></span>
+          <span className="nav-text">日历</span>
+        </button>
+        <button className={`nav-item ${is("planned") ? "active" : ""}`} onClick={() => onSelect({ kind: "planned" })}>
+          <span className="nav-icon"><IconCalendar size={17} /></span>
+          <span className="nav-text">计划内</span>
+          {counts && counts.planned > 0 && <span className="nav-count">{counts.planned}</span>}
         </button>
 
         <div className="nav-group-title">
@@ -319,6 +291,8 @@ export function viewTitle(view: View, lists: TaskList[]): string {
       return "设置";
     case "history":
       return "历史记录";
+    case "calendar":
+      return "日历";
     case "list":
       return lists.find((l) => l.id === view.listId)?.name ?? "清单";
     default:
@@ -346,6 +320,9 @@ export function viewIcon(view: View, lists: TaskList[]) {
       return <IconSettings size={20} />;
     case "history":
       return <IconHistory size={20} />;
+    case "calendar":
+    case "day":
+      return <IconCalendar size={20} />;
     case "list": {
       const color = lists.find((l) => l.id === view.listId)?.color;
       return <span className="dot" style={{ background: color ?? "var(--accent)" }} />;

@@ -193,9 +193,11 @@ export function TaskList({
                 ? "还没有已完成的任务"
                 : view.kind === "deleted"
                   ? "回收站是空的"
-                  : view.kind === "myDay"
-                    ? "把任务加入「我的一天」，专注今天要做的事"
-                    : "这里还没有任务，在上方输入框添加第一条"
+                  : view.kind === "day"
+                    ? "这一天没有任务"
+                    : view.kind === "myDay"
+                      ? "把任务加入「我的一天」，专注今天要做的事"
+                      : "这里还没有任务，在上方输入框添加第一条"
           }
         />
       ) : (
@@ -233,7 +235,7 @@ export function TaskList({
               <div className="task-body">
                 <div className="task-title">{t.title}</div>
                 <div className="task-meta">
-                  {t.dueDate && (
+                  {t.dueDate && !(view.kind === "day" && t.recurrence) && (
                     <span className={`meta-item ${overdue ? "overdue" : isToday ? "today" : ""}`}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                         <rect x="3.5" y="5" width="17" height="16" rx="2.5" />

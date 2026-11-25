@@ -5,6 +5,7 @@ import {
   type AppInfo,
   type AppSettings,
   type BackupEntry,
+  type CalendarDay,
   type DbStats,
   type DeletedList,
   type HistoryEntry,
@@ -16,6 +17,7 @@ import {
   type View,
 } from "./api";
 import { Sidebar, viewIcon, viewTitle } from "./components/Sidebar";
+import { CalendarView } from "./components/CalendarView";
 import { TaskList } from "./components/TaskList";
 import { TaskDetails } from "./components/TaskDetails";
 import { NotesView } from "./components/NotesView";
@@ -23,10 +25,13 @@ import { SettingsView } from "./components/SettingsView";
 import { HistoryView } from "./components/HistoryView";
 import { ListModal } from "./components/ListModal";
 import { ConfirmModal } from "./components/Modal";
-import { IconBell, IconPlus, IconRefresh } from "./components/Icons";
+import { IconBell, IconCalendar, IconPlus, IconRefresh } from "./components/Icons";
 import {
   currentWeekNumber,
+  formatDayTitle,
   formatDueLabel,
+  monthGrid,
+  parseDateString,
   setDisplayTimezone,
   todayString,
 } from "./utils/date";
@@ -43,7 +48,9 @@ type ModalState =
   | null;
 
 function viewKey(v: View): string {
-  return v.kind === "list" ? `list:${v.listId ?? ""}` : v.kind;
+  if (v.kind === "list") return `list:${v.listId ?? ""}`;
+  if (v.kind === "day") return `day:${v.date ?? ""}`;
+  return v.kind;
 }
 
 function readSort(key: string): SortKind {
@@ -82,6 +89,12 @@ export default function App() {
   const [focusSignal, setFocusSignal] = useState(0);
   const [tick, setTick] = useState(0);
   const [booted, setBooted] = useState(false);
+  // 日历当前浏览的年月（与主视图、单日日期相互独立）
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = parseDateString(todayString());
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+  const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const tickRef = useRef(0);
   const completionLock = useRef<Map<string, number>>(new Map());
 
@@ -153,17 +166,26 @@ export default function App() {
   // 任务列表加载
   useEffect(() => {
     if (!booted) return;
-    if (view.kind === "notes" || view.kind === "settings" || view.kind === "history") return;
+    if (
+      view.kind === "notes" ||
+      view.kind === "settings" ||
+      view.kind === "history" ||
+      view.kind === "calendar"
+    )
+      return;
     let cancelled = false;
     const q = search.trim();
-    const query = q
-      ? { view: "all", search: q }
-      : {
-          view: view.kind === "list" ? "list" : view.kind,
-          listId: view.listId ?? null,
-        };
-    api
-      .listTasks(query)
+    const request = () => {
+      if (view.kind === "day" && view.date && !q) return api.listTasksForDay(view.date);
+      const query = q
+        ? { view: "all", search: q }
+        : {
+            view: view.kind === "list" ? "list" : view.kind,
+            listId: view.listId ?? null,
+          };
+      return api.listTasks(query);
+    };
+    request()
       .then((data) => {
         if (!cancelled) setTasks(data);
       })
@@ -172,6 +194,23 @@ export default function App() {
       cancelled = true;
     };
   }, [view, search, tick, booted, notify]);
+
+  // 月历数据（按当前浏览月份）
+  useEffect(() => {
+    if (!booted || view.kind !== "calendar") return;
+    let cancelled = false;
+    setCalendarDays([]);
+    const cells = monthGrid(calendarMonth.year, calendarMonth.month);
+    api
+      .calendarMonth(cells[0], cells[cells.length - 1])
+      .then((data) => {
+        if (!cancelled) setCalendarDays(data);
+      })
+      .catch((e) => notify(String(e), true));
+    return () => {
+      cancelled = true;
+    };
+  }, [booted, view.kind, calendarMonth, tick, notify]);
 
   // 最近删除中的清单加载
   useEffect(() => {
@@ -332,6 +371,32 @@ export default function App() {
     }
   };
 
+  // 从月历进入单日视图
+  const openDay = (date: string) => {
+    setSearch("");
+    setSelectedId(null);
+    setSelectedTask(null);
+    setView({ kind: "day", date });
+  };
+
+  // 从单日视图返回日历，并定位到该日期所在月份
+  const backToCalendar = () => {
+    if (view.kind !== "day" || !view.date) return;
+    const d = parseDateString(view.date);
+    setCalendarMonth({ year: d.getFullYear(), month: d.getMonth() });
+    setSearch("");
+    setSelectedId(null);
+    setSelectedTask(null);
+    setView({ kind: "calendar" });
+  };
+
+  const shiftCalendarMonth = (delta: number) => {
+    setCalendarMonth((c) => {
+      const next = c.month + delta;
+      return { year: c.year + Math.floor(next / 12), month: ((next % 12) + 12) % 12 };
+    });
+  };
+
   // 跳转后定位并柔和闪动两次
   useEffect(() => {
     if (!focusTaskId || view.kind !== "all") return;
@@ -362,7 +427,8 @@ export default function App() {
       listId,
       note: null,
       isImportant: view.kind === "important" ? true : null,
-      dueDate: null,
+      // 单日视图中新建任务直接落在当天
+      dueDate: view.kind === "day" ? view.date ?? null : null,
       dueTime: null,
       reminderOffset: null,
       myDay,
@@ -545,6 +611,7 @@ export default function App() {
     if (view.kind === "settings") return "提醒、备份与系统集成";
     if (view.kind === "notes") return `${notes.length} 条笔记 · 自动保存`;
     if (view.kind === "history") return "最近 300 条任务操作记录";
+    if (view.kind === "calendar") return "点击有任务的日期查看当天任务";
     if (search.trim()) return `搜索「${search.trim()}」· ${tasks.length} 个结果`;
     if (view.kind === "completed") return `${tasks.length} 个已完成任务`;
     if (view.kind === "deleted")
@@ -573,7 +640,10 @@ export default function App() {
     );
 
   const showTaskList =
-    view.kind !== "notes" && view.kind !== "settings" && view.kind !== "history";
+    view.kind !== "notes" &&
+    view.kind !== "settings" &&
+    view.kind !== "history" &&
+    view.kind !== "calendar";
 
   return (
     <div className="app">
@@ -587,9 +657,10 @@ export default function App() {
         onCreateList={() => setModal({ type: "list" })}
         onManageList={(l) => setModal({ type: "list", list: l })}
         onReorderLists={(ids) => void reorderLists(ids)}
-        weekLabel={`${currentWeekNumber(
+        weekLabel={`第${currentWeekNumber(
           settings?.weekCustomized ? settings.weekBaseDate : null,
         )}周`}
+        weekBaseDate={settings?.weekCustomized ? settings.weekBaseDate : null}
         onSetWeekBase={async (date) => {
           if (!settings) return;
           try {
@@ -608,12 +679,30 @@ export default function App() {
       <main className="main">
         <header className="main-header">
           <div className="main-title-row">
-            <h1 className="main-title">
-              {viewIcon(view, lists)}
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {search.trim() ? "搜索结果" : viewTitle(view, lists)}
-              </span>
-            </h1>
+            {view.kind === "day" && view.date ? (
+              <h1 className="main-title">
+                <button
+                  type="button"
+                  className="day-back-btn"
+                  title="返回日历"
+                  onClick={backToCalendar}
+                >
+                  <IconCalendar size={17} />
+                </button>
+                <span
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  {formatDayTitle(view.date)}
+                </span>
+              </h1>
+            ) : (
+              <h1 className="main-title">
+                {viewIcon(view, lists)}
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {search.trim() ? "搜索结果" : viewTitle(view, lists)}
+                </span>
+              </h1>
+            )}
             <div className="header-actions">
               {view.kind === "notes" ? (
                 <button className="icon-btn" title="新建笔记" onClick={() => void createNote()}>
@@ -724,6 +813,15 @@ export default function App() {
           />
         ) : view.kind === "history" ? (
           <HistoryView entries={history} />
+        ) : view.kind === "calendar" ? (
+          <CalendarView
+            year={calendarMonth.year}
+            month={calendarMonth.month}
+            days={calendarDays}
+            onPrev={() => shiftCalendarMonth(-1)}
+            onNext={() => shiftCalendarMonth(1)}
+            onOpenDay={openDay}
+          />
         ) : (
           <TaskList
             tasks={tasks}
