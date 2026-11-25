@@ -22,14 +22,37 @@ impl Db {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
+        // 迁移前先复制数据库文件；迁移本身在事务中执行，失败自动回滚
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let backup = if version > 0 && version < SCHEMA_VERSION {
+            Some(backup_before_migration(&conn, path, version)?)
+        } else {
+            None
+        };
+        let migrated = (|| -> AppResult<()> {
+            let tx = conn.unchecked_transaction()?;
+            migrate(&tx)?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(e) = migrated {
+            drop(conn);
+            if let Some(b) = backup.as_ref() {
+                let _ = std::fs::copy(b, path);
+                let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+                let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+            }
+            return Err(e);
+        }
+
         let db = Self {
             path: path.to_path_buf(),
             conn: Mutex::new(conn),
         };
         {
             let c = db.lock();
-            migrate(&c)?;
-            seed(&c)?;
+            crate::repo::in_tx(&c, seed)?;
             // 启动时先确定生效时区，再重建提醒计划，保证提醒按正确时区计算
             let settings = load_settings(&c)?;
             crate::domain::set_timezone(if settings.timezone_auto {
@@ -64,7 +87,24 @@ impl Db {
     }
 }
 
-const SCHEMA_VERSION: i64 = 4;
+/// 迁移前备份数据库文件（先 checkpoint，保证 WAL 中已提交的数据写入主文件）
+fn backup_before_migration(conn: &Connection, path: &Path, version: i64) -> AppResult<PathBuf> {
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "local-to-do.db".into());
+    let backup = path.with_file_name(format!(
+        "{}.v{}-backup-{}",
+        file_name,
+        version,
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    ));
+    std::fs::copy(path, &backup)?;
+    Ok(backup)
+}
+
+const SCHEMA_VERSION: i64 = 5;
 
 fn migrate(conn: &Connection) -> AppResult<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -203,6 +243,20 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         }
         consolidate_recurrences(conn)?;
     }
+    if version < 5 {
+        // v5：单向同步日志。rev 全局递增，业务数据与日志在同一事务中写入
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sync_log (
+                rev INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                op TEXT NOT NULL,
+                payload TEXT,
+                changed_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity, entity_id);",
+        )?;
+    }
     if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
@@ -325,27 +379,36 @@ fn seed(conn: &Connection) -> AppResult<()> {
 /// 启动时重建所有未完成任务的提醒计划（应对系统时间/时区变化）
 pub fn refresh_all_reminders(conn: &Connection) -> AppResult<()> {
     use crate::domain::compute_reminder_at;
-    let mut stmt = conn.prepare(
-        "SELECT id, due_date, due_time, reminder_offset, reminder_enabled FROM tasks
-         WHERE is_completed = 0 AND deleted_at IS NULL",
-    )?;
-    let rows: Vec<(String, Option<String>, Option<String>, Option<i64>, i64)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
-        .collect::<Result<_, _>>()?;
-    for (id, date, time, offset, enabled) in rows {
-        let at = if enabled != 0 {
-            // 开关开启但没有历史方案时按「准时提醒」处理
-            compute_reminder_at(date.as_deref(), time.as_deref(), offset.or(Some(0)))
-        } else {
-            None
+    crate::repo::in_tx(conn, |conn| {
+        let rows: Vec<(String, Option<String>, Option<String>, Option<i64>, i64, Option<i64>)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, due_date, due_time, reminder_offset, reminder_enabled, reminder_at
+                 FROM tasks WHERE is_completed = 0 AND deleted_at IS NULL",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })?;
+            rows.collect::<Result<_, _>>()?
         };
-        conn.execute(
-            "UPDATE tasks SET reminder_at = ?1 WHERE id = ?2",
-            rusqlite::params![at, id],
-        )?;
-        super::repo::sync_schedule(conn, &id, at)?;
-    }
-    Ok(())
+        for (id, date, time, offset, enabled, old_at) in rows {
+            let at = if enabled != 0 {
+                // 开关开启但没有历史方案时按「准时提醒」处理
+                compute_reminder_at(date.as_deref(), time.as_deref(), offset.or(Some(0)))
+            } else {
+                None
+            };
+            if at != old_at {
+                conn.execute(
+                    "UPDATE tasks SET reminder_at = ?1 WHERE id = ?2",
+                    rusqlite::params![at, id],
+                )?;
+                // 提醒时刻变化同样属于任务数据变化
+                crate::sync::log_task(conn, &id)?;
+            }
+            crate::repo::sync_schedule(conn, &id, at)?;
+        }
+        Ok(())
+    })
 }
 
 /// 设置读写（避免循环依赖，放在 db 模块）

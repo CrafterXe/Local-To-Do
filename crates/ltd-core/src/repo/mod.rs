@@ -17,6 +17,18 @@ pub fn now_ms() -> i64 {
     crate::domain::local_now_ms()
 }
 
+/// 在单个事务中执行写入与同步记录：任一步失败则整体回滚，
+/// 保证业务数据与 sync_log 不会出现一半成功的情况。
+pub(crate) fn in_tx<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> AppResult<T>,
+) -> AppResult<T> {
+    let tx = conn.unchecked_transaction()?;
+    let out = f(&tx)?;
+    tx.commit()?;
+    Ok(out)
+}
+
 pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }

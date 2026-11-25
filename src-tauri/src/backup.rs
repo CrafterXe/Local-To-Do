@@ -411,6 +411,9 @@ pub fn restore_from_json(conn: &mut Connection, path: &Path) -> AppResult<Restor
     s.last_backup_at = Some(ltd_core::domain::local_now_ms());
     save_settings(conn, &s)?;
 
+    // 整体替换数据后，通知手机端丢弃游标并重新拉取全量快照
+    ltd_core::sync::record_reset(conn)?;
+
     Ok(RestoreReport {
         lists,
         tasks,
