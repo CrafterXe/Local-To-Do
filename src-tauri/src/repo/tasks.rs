@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
+use std::collections::BTreeMap;
+
+use chrono::{Duration, NaiveDate};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{compute_reminder_at, parse_date, Rule};
 use crate::error::{err, AppResult};
-use crate::models::{Recurrence, Task, TaskQuery, TaskStep};
+use crate::models::{CalendarDay, Recurrence, Task, TaskQuery, TaskStep};
 
 use super::{cancel_schedules, history, new_id, now_ms, sync_schedule};
 
@@ -210,6 +213,96 @@ pub fn list_tasks(conn: &Connection, q: &TaskQuery) -> AppResult<Vec<Task>> {
     let mut tasks = rows.collect::<Result<Vec<_>, _>>()?;
     load_steps(conn, &mut tasks)?;
     Ok(tasks)
+}
+
+/// 由数据库中的重复规则构造纯逻辑规则
+fn recurrence_rule(rec: &Recurrence) -> Option<Rule> {
+    let base = parse_date(&rec.base_date)?;
+    Some(Rule::new(
+        &rec.kind,
+        rec.interval.max(1),
+        rec.weekday_numbers(),
+        rec.month_day.map(|m| m as u32),
+        base,
+    ))
+}
+
+/// 月历/单日视图共用的候选任务：未删除、未完成。
+/// 日历只展示仍然待处理的任务，与「全部任务」保持同一口径。
+fn active_tasks(conn: &Connection) -> AppResult<Vec<Task>> {
+    let sql = format!(
+        "{TASK_SELECT} WHERE t.deleted_at IS NULL AND t.is_completed = 0{TASK_ORDER}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], map_task)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// 重复任务在某一天是否实际发生。
+/// 只从当前待处理的周期（due_date）开始向后计算，避免把已经完成的旧周期重复展示。
+fn occurs_on(task: &Task, target: NaiveDate) -> bool {
+    match task.recurrence.as_ref() {
+        Some(rec) => {
+            let due = task.due_date.as_deref().and_then(parse_date);
+            if let Some(due) = due {
+                if target < due {
+                    return false;
+                }
+            }
+            recurrence_rule(rec).map(|rule| rule.matches(target)).unwrap_or(false)
+        }
+        None => task.due_date.as_deref().and_then(parse_date) == Some(target),
+    }
+}
+
+/// 月历数据：返回 [start, end] 区间内每天的实际任务统计
+pub fn calendar_month(conn: &Connection, start: &str, end: &str) -> AppResult<Vec<CalendarDay>> {
+    let start_date = parse_date(start).ok_or_else(|| crate::error::AppError::Other("起始日期无效".into()))?;
+    let end_date = parse_date(end).ok_or_else(|| crate::error::AppError::Other("结束日期无效".into()))?;
+    if end_date < start_date {
+        return err("结束日期不能早于起始日期");
+    }
+
+    let tasks = active_tasks(conn)?;
+    let mut days: BTreeMap<NaiveDate, CalendarDay> = BTreeMap::new();
+
+    for task in &tasks {
+        let mut d = start_date;
+        while d <= end_date {
+            if occurs_on(task, d) {
+                let entry = days.entry(d).or_insert_with(|| CalendarDay {
+                    date: d.format("%Y-%m-%d").to_string(),
+                    total: 0,
+                    non_repeat: 0,
+                    repeat: 0,
+                    has_important: false,
+                });
+                entry.total += 1;
+                if task.recurrence.is_some() {
+                    entry.repeat += 1;
+                } else {
+                    entry.non_repeat += 1;
+                }
+                if task.is_important {
+                    entry.has_important = true;
+                }
+            }
+            d += Duration::days(1);
+        }
+    }
+
+    Ok(days.into_values().collect())
+}
+
+/// 单日视图：返回某一天实际发生的任务（含完整任务数据，可直接编辑）
+pub fn tasks_for_day(conn: &Connection, date: &str) -> AppResult<Vec<Task>> {
+    let target = parse_date(date).ok_or_else(|| crate::error::AppError::Other("日期无效".into()))?;
+    let mut matched: Vec<Task> = active_tasks(conn)?
+        .into_iter()
+        .filter(|task| occurs_on(task, target))
+        .collect();
+    load_steps(conn, &mut matched)?;
+    Ok(matched)
 }
 
 pub fn get_task(conn: &Connection, id: &str) -> AppResult<Task> {

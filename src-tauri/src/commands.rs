@@ -97,6 +97,24 @@ pub fn list_tasks(state: State<'_, Arc<AppState>>, query: TaskQuery) -> AppResul
     repo::list_tasks(&conn, &query)
 }
 
+/// 月历视图：指定日期区间内每天的任务统计
+#[tauri::command]
+pub fn calendar_month(
+    state: State<'_, Arc<AppState>>,
+    start: String,
+    end: String,
+) -> AppResult<Vec<crate::models::CalendarDay>> {
+    let conn = state.db.lock();
+    repo::calendar_month(&conn, &start, &end)
+}
+
+/// 单日视图：某一天实际发生的任务
+#[tauri::command]
+pub fn list_tasks_for_day(state: State<'_, Arc<AppState>>, date: String) -> AppResult<Vec<Task>> {
+    let conn = state.db.lock();
+    repo::tasks_for_day(&conn, &date)
+}
+
 /// 已触发提醒但尚未完成的任务（提醒栏使用）
 #[tauri::command]
 pub fn list_notified_tasks(state: State<'_, Arc<AppState>>) -> AppResult<Vec<Task>> {

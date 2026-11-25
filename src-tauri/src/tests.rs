@@ -899,6 +899,69 @@ fn fired_reminder_is_not_recreated_after_task_update() {
 }
 
 #[test]
+fn calendar_expands_recurring_task_by_rule() {
+    let db = setup();
+    let conn = db.lock();
+    repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-01".into()),
+            recurrence: Some(RecurrenceInput {
+                kind: "daily".into(),
+                interval: 1,
+                weekdays: String::new(),
+                month_day: None,
+            }),
+            ..make_input(&conn, "每天的任务")
+        },
+    )
+    .unwrap();
+
+    // 月历网格通常从 11 月底延伸到次年 1 月初
+    let days = repo::calendar_month(&conn, "2026-11-30", "2027-01-10").unwrap();
+    let on = |date: &str| days.iter().find(|d| d.date == date).cloned();
+
+    // 当前待处理周期之前不展示，周期内每天都算一次发生
+    assert!(on("2026-11-30").is_none());
+    let dec1 = on("2026-12-01").expect("12-01 应有任务");
+    assert_eq!(dec1.total, 1);
+    assert_eq!(dec1.repeat, 1);
+    assert_eq!(dec1.non_repeat, 0);
+    assert_eq!(on("2026-12-31").unwrap().total, 1);
+
+    // 单日视图只返回当天实际发生的任务
+    assert_eq!(repo::tasks_for_day(&conn, "2026-11-30").unwrap().len(), 0);
+    assert_eq!(repo::tasks_for_day(&conn, "2026-12-15").unwrap().len(), 1);
+}
+
+#[test]
+fn calendar_only_shows_tasks_with_due_date_and_marks_important() {
+    let db = setup();
+    let conn = db.lock();
+    let important = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-08".into()),
+            is_important: Some(true),
+            ..make_input(&conn, "重要任务")
+        },
+    )
+    .unwrap();
+    repo::create_task(&conn, &make_input(&conn, "没有日期的任务")).unwrap();
+
+    let days = repo::calendar_month(&conn, "2026-12-01", "2026-12-31").unwrap();
+    assert_eq!(days.len(), 1);
+    assert_eq!(days[0].date, "2026-12-08");
+    assert_eq!(days[0].non_repeat, 1);
+    assert!(days[0].has_important);
+
+    let day = repo::tasks_for_day(&conn, "2026-12-08").unwrap();
+    assert_eq!(day.len(), 1);
+    assert_eq!(day[0].id, important.id);
+    assert!(repo::tasks_for_day(&conn, "2026-12-09").unwrap().is_empty());
+}
+
+#[test]
 fn editing_fields_keeps_important_and_my_day() {
     let db = setup();
     let conn = db.lock();

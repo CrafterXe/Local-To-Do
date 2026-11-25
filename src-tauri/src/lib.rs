@@ -121,6 +121,8 @@ pub fn run() {
             commands::restore_list,
             commands::purge_list,
             commands::list_tasks,
+            commands::calendar_month,
+            commands::list_tasks_for_day,
             commands::list_notified_tasks,
             commands::get_task,
             commands::create_task,

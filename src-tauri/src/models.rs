@@ -100,6 +100,22 @@ pub struct TaskQuery {
     pub include_completed: Option<bool>,
 }
 
+/// 月历中某一天的任务统计（仅用于日历展示，不改变任务数据）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarDay {
+    /// 本地日期 YYYY-MM-DD
+    pub date: String,
+    /// 当天实际发生的任务数（同一重复任务只计一次）
+    pub total: i64,
+    /// 当天到期的非重复任务数
+    pub non_repeat: i64,
+    /// 当天实际发生的重复任务数
+    pub repeat: i64,
+    /// 当天是否有重要任务
+    pub has_important: bool,
+}
+
 /// 独立笔记
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
