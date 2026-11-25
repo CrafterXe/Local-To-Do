@@ -373,6 +373,11 @@ pub fn save_settings(conn: &Connection, s: &AppSettings) -> AppResult<()> {
         ),
         ("timezone_auto", bool_str(s.timezone_auto)),
         ("timezone", s.timezone.clone().unwrap_or_default()),
+        (
+            "week_base_date",
+            s.week_base_date.clone().unwrap_or_default(),
+        ),
+        ("week_customized", bool_str(s.week_customized)),
     ];
     for (k, v) in pairs {
         conn.execute(
@@ -429,6 +434,10 @@ pub fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
             }
             "timezone_auto" => s.timezone_auto = v != "0",
             "timezone" => s.timezone = if v.trim().is_empty() { None } else { Some(v) },
+            "week_base_date" => {
+                s.week_base_date = if v.trim().is_empty() { None } else { Some(v) }
+            }
+            "week_customized" => s.week_customized = v == "1",
             _ => {}
         }
     }

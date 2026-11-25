@@ -24,7 +24,12 @@ import { HistoryView } from "./components/HistoryView";
 import { ListModal } from "./components/ListModal";
 import { ConfirmModal } from "./components/Modal";
 import { IconBell, IconPlus, IconRefresh } from "./components/Icons";
-import { formatDueLabel, setDisplayTimezone, todayString } from "./utils/date";
+import {
+  currentWeekNumber,
+  formatDueLabel,
+  setDisplayTimezone,
+  todayString,
+} from "./utils/date";
 import { DEFAULT_SORT_KIND, DEFAULT_VIEW } from "./utils/defaults";
 import type { SortKind } from "./utils/sort";
 
@@ -312,12 +317,19 @@ export default function App() {
   };
 
   const jumpToNotified = (task: Task) => {
+    const hadDetailOpen = selectedTask !== null;
     setReminderOpen(false);
     setSearch("");
     setView({ kind: "all" });
-    // 选中任务并打开右侧详情，确保跳转落到具体任务而不是只切换列表
-    void selectTask(task.id);
     setFocusTaskId(task.id);
+    if (hadDetailOpen) {
+      // 保持详情面板打开，切换到对应任务
+      void selectTask(task.id);
+    } else {
+      // 保持详情面板关闭
+      setSelectedTask(null);
+      setSelectedId(null);
+    }
   };
 
   // 跳转后定位并柔和闪动两次
@@ -575,6 +587,22 @@ export default function App() {
         onCreateList={() => setModal({ type: "list" })}
         onManageList={(l) => setModal({ type: "list", list: l })}
         onReorderLists={(ids) => void reorderLists(ids)}
+        weekLabel={`${currentWeekNumber(
+          settings?.weekCustomized ? settings.weekBaseDate : null,
+        )}周`}
+        onSetWeekBase={async (date) => {
+          if (!settings) return;
+          try {
+            const updated = await api.updateSettings({
+              ...settings,
+              weekBaseDate: date,
+              weekCustomized: true,
+            });
+            setSettings(updated);
+          } catch (e) {
+            notify(String(e), true);
+          }
+        }}
       />
 
       <main className="main">

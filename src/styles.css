@@ -154,6 +154,50 @@ select {
   line-height: 1.2;
 }
 
+/* 周数 */
+.sidebar-week-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: 2px;
+}
+
+.sidebar-week-label {
+  border: none;
+  background: transparent;
+  padding: 2px 8px;
+  font-size: 12.5px;
+  color: var(--muted-2);
+  cursor: pointer;
+  border-radius: 6px;
+  line-height: 1.4;
+  font-family: inherit;
+  transition: color 0.15s, background 0.15s;
+}
+
+.sidebar-week-label:hover {
+  color: var(--text);
+  background: var(--panel-alt);
+}
+
+.sidebar-week-picker {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 200;
+  font-size: 12.5px;
+  padding: 4px 6px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+}
+
+.sidebar-week-picker:focus {
+  border-color: var(--accent);
+}
+
 .search-box {
   display: flex;
   align-items: center;

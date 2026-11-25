@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { SidebarCounts, TaskList, View } from "../api";
+import { toDateString } from "../utils/date";
 import {
   IconAll,
   IconCalendar,
@@ -27,6 +28,8 @@ interface Props {
   onCreateList: () => void;
   onManageList: (l: TaskList) => void;
   onReorderLists: (ids: string[]) => void;
+  weekLabel: string;
+  onSetWeekBase: (date: string) => void;
 }
 
 export function Sidebar({
@@ -39,6 +42,8 @@ export function Sidebar({
   onCreateList,
   onManageList,
   onReorderLists,
+  weekLabel,
+  onSetWeekBase,
 }: Props) {
   const is = (kind: string, listId?: string) =>
     view.kind === kind && (listId === undefined || view.listId === listId);
@@ -48,6 +53,9 @@ export function Sidebar({
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const dropRef = useRef<{ id: string; after: boolean } | null>(null);
   const didDragRef = useRef(false);
+
+  const [weekEditing, setWeekEditing] = useState(false);
+  const weekPickerRef = useRef<HTMLInputElement>(null);
 
   const startDrag = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0) return;
@@ -124,6 +132,38 @@ export function Sidebar({
         </div>
         <div className="brand">
           <div className="brand-name">Local To Do</div>
+        </div>
+        <div className="sidebar-week-wrap">
+          <button
+            type="button"
+            className="sidebar-week-label"
+            title="点击设置第一周基准日期"
+            onClick={() => {
+              setWeekEditing(true);
+              requestAnimationFrame(() => {
+                const el = weekPickerRef.current;
+                el?.focus();
+                // 尝试触发原生日历弹窗（Chrome/Edge 支持 showPicker）
+                try { (el as any)?.showPicker?.(); } catch { /* ignore */ }
+              });
+            }}
+          >
+            {weekLabel}
+          </button>
+          {weekEditing && (
+            <input
+              ref={weekPickerRef}
+              type="date"
+              className="sidebar-week-picker"
+              defaultValue={toDateString(new Date())}
+              onChange={(e) => {
+                const v = e.target.value;
+                setWeekEditing(false);
+                if (v) onSetWeekBase(v);
+              }}
+              onBlur={() => setWeekEditing(false)}
+            />
+          )}
         </div>
       </div>
 

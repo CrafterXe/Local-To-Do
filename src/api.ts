@@ -88,6 +88,8 @@ export interface AppSettings {
   defaultListId: string | null;
   timezoneAuto: boolean;
   timezone: string | null;
+  weekBaseDate: string | null;
+  weekCustomized: boolean;
 }
 
 export interface AppInfo {

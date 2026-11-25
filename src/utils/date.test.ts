@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addDays,
   combineReminderOffset,
+  currentWeekNumber,
   defaultReminderOffset,
   diffDays,
   formatDueLabel,
@@ -18,6 +19,7 @@ import {
   toDateString,
   todayString,
   weekdayIndex,
+  weekNumberByBase,
 } from "./date";
 
 describe("日期基础函数", () => {
@@ -204,5 +206,62 @@ describe("显示时区", () => {
     setDisplayTimezone("Invalid/Zone");
     expect(() => todayString()).not.toThrow();
     expect(() => formatTimestamp(0)).not.toThrow();
+  });
+});
+
+describe("周数计算（周一为一周开始）", () => {
+  it("同自然周算第 1 周", () => {
+    // 2026-03-16 是周一，同周的周一到周日（3-16 至 3-22）都应是第 1 周
+    expect(weekNumberByBase("2026-03-16", "2026-03-16")).toBe(1); // 周一
+    expect(weekNumberByBase("2026-03-18", "2026-03-16")).toBe(1); // 周三
+    expect(weekNumberByBase("2026-03-22", "2026-03-16")).toBe(1); // 周日
+    // 基准日为同周周三，同一周周一也应是第 1 周
+    expect(weekNumberByBase("2026-03-16", "2026-03-18")).toBe(1);
+    expect(weekNumberByBase("2026-03-22", "2026-03-22")).toBe(1);
+  });
+
+  it("下一周算第 2 周", () => {
+    expect(weekNumberByBase("2026-03-23", "2026-03-16")).toBe(2); // 下周一
+    expect(weekNumberByBase("2026-03-29", "2026-03-16")).toBe(2); // 下周日
+  });
+
+  it("跨月跨年正确：函数严格按给定基准计算，跨年不自动重置", () => {
+    // 2026-01-01(周四) 作为基准，该周算第 1 周
+    expect(weekNumberByBase("2026-01-01", "2026-01-01")).toBe(1);
+    // 2027-01-01(周五) 距基准 52 周
+    expect(weekNumberByBase("2027-01-01", "2026-01-01")).toBe(53);
+    // 自定义基准跨年仍按原基准
+    expect(weekNumberByBase("2027-01-01", "2026-06-15")).toBeGreaterThan(25);
+  });
+
+  it("2026 年 1 月 1 日是周四，所在周(12-29至1-4)算第 1 周", () => {
+    expect(weekNumberByBase("2025-12-29", "2026-01-01")).toBe(1); // 周一
+    expect(weekNumberByBase("2026-01-01", "2026-01-01")).toBe(1);
+    expect(weekNumberByBase("2026-01-04", "2026-01-01")).toBe(1); // 周日
+    expect(weekNumberByBase("2026-01-05", "2026-01-01")).toBe(2); // 下周一
+  });
+
+  it("自定义基准：2026-03-18(周三)作为第一周", () => {
+    // 该周的周一 3-16 至 周日 3-22 都是第 1 周
+    expect(weekNumberByBase("2026-03-16", "2026-03-18")).toBe(1);
+    expect(weekNumberByBase("2026-03-22", "2026-03-18")).toBe(1);
+    expect(weekNumberByBase("2026-03-23", "2026-03-18")).toBe(2);
+    expect(weekNumberByBase("2026-03-30", "2026-03-18")).toBe(3);
+  });
+
+  it("当前日期早于基准时返回非正数", () => {
+    expect(weekNumberByBase("2026-03-09", "2026-03-18")).toBe(0); // 基准前一周
+    expect(weekNumberByBase("2026-03-02", "2026-03-18")).toBe(-1); // 基准前两周
+  });
+
+  it("currentWeekNumber：基准为 null 时用当年 1 月 1 日", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-25T10:00:00"));
+    // 2026-11-25 周三；以 2026-01-01 为基准计算
+    const w = currentWeekNumber(null);
+    expect(w).toBeGreaterThan(0);
+    // 显式传 baseDate 应与 null 等价（同一天）
+    expect(currentWeekNumber(null)).toBe(weekNumberByBase(todayString(), "2026-01-01"));
+    vi.useRealTimers();
   });
 });

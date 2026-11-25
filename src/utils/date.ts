@@ -223,3 +223,38 @@ export function recurrenceLabel(rec: {
 export function defaultReminderOffset(): number {
   return 0;
 }
+
+/** 计算自然周（周一为一周开始）的周一日期 Date */
+function weekMonday(dateStr: string): Date {
+  const d = parseDateString(dateStr);
+  // JS getDay() 0=周日，6=周六；转周一=0 .. 周日=6
+  const dow = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - dow);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/**
+ * 周数：以 baseDate 所在自然周为第 1 周，计算 currentDate 所在自然周是第几周。
+ * 输入日期格式 YYYY-MM-DD，返回整数，可正可负（current 在 base 之前时为 0 或负数）。
+ */
+export function weekNumberByBase(currentDate: string, baseDate: string): number {
+  const cur = weekMonday(currentDate).getTime();
+  const base = weekMonday(baseDate).getTime();
+  const weeksDiff = Math.round((cur - base) / (7 * 86_400_000));
+  return weeksDiff + 1;
+}
+
+/** 当年 1 月 1 日（用于默认周数基准） */
+export function yearFirstDay(): string {
+  const d = parseDateString(todayString());
+  return `${d.getFullYear()}-01-01`;
+}
+
+/** 取得当前周数：优先使用 settings 的 weekBaseDate；None 时当年 1 月 1 日 */
+export function currentWeekNumber(
+  baseDate: string | null | undefined,
+): number {
+  const cur = todayString();
+  const base = baseDate || yearFirstDay();
+  return weekNumberByBase(cur, base);
+}

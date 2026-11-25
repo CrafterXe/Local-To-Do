@@ -155,6 +155,10 @@ pub struct AppSettings {
     pub timezone_auto: bool,
     /// 手动时区（IANA 名称，如 Asia/Shanghai），自动模式下忽略
     pub timezone: Option<String>,
+    /// 周数基准日期（YYYY-MM-DD），所在自然周算第 1 周；None 表示用当年 1 月 1 日
+    pub week_base_date: Option<String>,
+    /// 用户是否已自定义周数基准。false 时跨年自动重置为新年 1 月 1 日
+    pub week_customized: bool,
 }
 
 impl Default for AppSettings {
@@ -173,6 +177,8 @@ impl Default for AppSettings {
             default_list_id: None,
             timezone_auto: true,
             timezone: None,
+            week_base_date: None,
+            week_customized: false,
         }
     }
 }
