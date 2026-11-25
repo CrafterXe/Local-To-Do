@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { monthGrid, monthTitle, parseDateString, todayString, WEEKDAY_SHORT } from "../utils/date";
+import { addMonthWheelListener } from "../utils/wheel";
 import { IconChevronLeft, IconChevronRight } from "./Icons";
 
 interface Props {
@@ -56,17 +57,16 @@ export function WeekPicker({ label, anchorDate, onSelect }: Props) {
   }, [open]);
 
   // 面板内滚轮切换月份（仅在面板内响应，避免影响任务列表滚动）
+  // 与 CalendarView 共用同一套灵敏度：每个有效滚动事件切换一个月
   useEffect(() => {
     if (!open) return;
     const el = panelRef.current;
     if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      if (e.deltaY === 0) return;
-      shiftMonth(e.deltaY > 0 ? 1 : -1);
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return addMonthWheelListener(
+      el,
+      () => shiftMonth(-1),
+      () => shiftMonth(1),
+    );
   }, [open]);
 
   const cells = monthGrid(cursor.year, cursor.month);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { CalendarDay } from "../api";
 import { monthGrid, parseDateString, monthTitle, todayString, WEEKDAY_SHORT } from "../utils/date";
+import { addMonthWheelListener } from "../utils/wheel";
 import { IconChevronLeft, IconChevronRight, IconStar } from "./Icons";
 
 interface Props {
@@ -26,33 +27,16 @@ export function CalendarView({ year, month, days, onPrev, onNext, onOpenDay }: P
   const viewRef = useRef<HTMLDivElement>(null);
   const handlersRef = useRef({ onPrev, onNext });
   handlersRef.current = { onPrev, onNext };
-  // 滚轮手势状态：累积阈值 + 冷却时间，避免一次滚动跳过多个月
-  const wheelRef = useRef({ acc: 0, last: 0, lock: 0 });
 
+  // 滚轮切换月份：每个有效滚动事件切换一个月，仅做极短去重避免一次输入跳多月
   useEffect(() => {
     const el = viewRef.current;
     if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      // 允许 Ctrl + 滚轮缩放，不拦截
-      if (e.ctrlKey) return;
-      e.preventDefault();
-      const now = performance.now();
-      const state = wheelRef.current;
-      // 新的滚动手势重新累积
-      if (now - state.last > 320) state.acc = 0;
-      state.last = now;
-      // 冷却期间忽略后续事件，防止一次普通滚动连续跳月
-      if (now < state.lock) return;
-      state.acc += e.deltaY;
-      if (Math.abs(state.acc) < 36) return;
-      const direction = state.acc > 0 ? 1 : -1;
-      state.acc = 0;
-      state.lock = now + 180;
-      if (direction > 0) handlersRef.current.onNext();
-      else handlersRef.current.onPrev();
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return addMonthWheelListener(
+      el,
+      () => handlersRef.current.onPrev(),
+      () => handlersRef.current.onNext(),
+    );
   }, []);
 
   return (
