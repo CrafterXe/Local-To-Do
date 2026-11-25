@@ -522,3 +522,62 @@ pub fn open_backup_dir(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppRe
         .open_path(state.backup_dir.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| ltd_core::error::AppError::Other(e.to_string()))
 }
+
+// ---------------- 局域网同步（Windows 服务端） ----------------
+
+#[tauri::command]
+pub fn sync_server_status(state: State<'_, Arc<AppState>>) -> crate::sync_server::SyncStatus {
+    state.sync.status()
+}
+
+/// 开启同步服务：自动选择家庭局域网地址并监听默认端口
+#[tauri::command]
+pub fn sync_server_start(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::SyncStatus> {
+    state.sync.start()
+}
+
+#[tauri::command]
+pub fn sync_server_stop(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::SyncStatus> {
+    state.sync.stop()
+}
+
+/// 生成一次性配对码与二维码（需服务已开启）
+#[tauri::command]
+pub fn sync_create_pairing(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::PairingInfo> {
+    state.sync.create_pairing()
+}
+
+#[tauri::command]
+pub fn sync_cancel_pairing(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    state.sync.cancel_pairing();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn sync_list_devices(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Vec<crate::sync_server::DeviceView>> {
+    state.sync.list_devices()
+}
+
+#[tauri::command]
+pub fn sync_revoke_device(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> AppResult<Vec<crate::sync_server::DeviceView>> {
+    state.sync.revoke_device(&id)
+}
+
+/// 重置配对：清除已授权设备并更换证书，需要手机重新扫码配对
+#[tauri::command]
+pub fn sync_reset_pairing(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::SyncStatus> {
+    state.sync.reset_pairing()
+}

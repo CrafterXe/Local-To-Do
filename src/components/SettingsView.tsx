@@ -10,6 +10,7 @@ import {
 } from "../api";
 import { formatBytes, formatRelative, formatTimestamp } from "../utils/date";
 import { ConfirmModal } from "./Modal";
+import { SyncSettings } from "./SyncSettings";
 import {
   IconBell,
   IconDatabase,
@@ -374,6 +375,8 @@ export function SettingsView({
           />
         </div>
       </section>
+
+      <SyncSettings notify={notify} />
 
       <section className="settings-section">
         <h2 className="settings-title">数据与备份</h2>

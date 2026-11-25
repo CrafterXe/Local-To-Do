@@ -153,6 +153,38 @@ export interface RestoreReport {
   recurrences: number;
 }
 
+export interface SyncStatus {
+  running: boolean;
+  protocolVersion: string;
+  host: string | null;
+  port: number | null;
+  fingerprint: string | null;
+  startedAt: number | null;
+  deviceCount: number;
+  pairingActive: boolean;
+  pairingExpiresAt: number | null;
+  firewallHint: string;
+  error: string | null;
+}
+
+export interface PairingInfo {
+  code: string;
+  expiresAt: number;
+  host: string;
+  port: number;
+  fingerprint: string;
+  protocolVersion: string;
+  payload: string;
+  qrSvg: string;
+}
+
+export interface SyncDevice {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastSeenAt: number | null;
+}
+
 export interface RecurrenceInput {
   kind: string;
   interval: number;
@@ -270,4 +302,13 @@ export const api = {
   validateBackup: (path: string) => invoke<RestoreReport>("validate_backup", { path }),
   openDataDir: () => invoke<void>("open_data_dir"),
   openBackupDir: () => invoke<void>("open_backup_dir"),
+
+  syncServerStatus: () => invoke<SyncStatus>("sync_server_status"),
+  syncServerStart: () => invoke<SyncStatus>("sync_server_start"),
+  syncServerStop: () => invoke<SyncStatus>("sync_server_stop"),
+  syncCreatePairing: () => invoke<PairingInfo>("sync_create_pairing"),
+  syncCancelPairing: () => invoke<void>("sync_cancel_pairing"),
+  syncListDevices: () => invoke<SyncDevice[]>("sync_list_devices"),
+  syncRevokeDevice: (id: string) => invoke<SyncDevice[]>("sync_revoke_device", { id }),
+  syncResetPairing: () => invoke<SyncStatus>("sync_reset_pairing"),
 };

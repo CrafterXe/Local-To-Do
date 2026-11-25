@@ -4,6 +4,7 @@ mod logging;
 mod scheduler;
 mod sound;
 mod state;
+mod sync_server;
 
 #[cfg(test)]
 mod tests;
@@ -181,9 +182,24 @@ pub fn run() {
             commands::validate_backup,
             commands::open_data_dir,
             commands::open_backup_dir,
+            commands::sync_server_status,
+            commands::sync_server_start,
+            commands::sync_server_stop,
+            commands::sync_create_pairing,
+            commands::sync_cancel_pairing,
+            commands::sync_list_devices,
+            commands::sync_revoke_device,
+            commands::sync_reset_pairing,
         ])
-        .run(tauri::generate_context!())
-        .expect("Local To Do 启动失败");
+        .build(tauri::generate_context!())
+        .expect("Local To Do 启动失败")
+        .run(|app_handle, event| {
+            // 应用退出时确保同步服务停止并释放监听端口
+            if matches!(event, tauri::RunEvent::Exit) {
+                let state = app_handle.state::<Arc<AppState>>();
+                let _ = state.sync.stop();
+            }
+        });
 }
 
 #[cfg(desktop)]
