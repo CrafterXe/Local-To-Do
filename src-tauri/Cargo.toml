@@ -1,6 +1,6 @@
 [package]
 name = "local-to-do"
-version = "1.1.1"
+version = "1.2.0"
 description = "Local To Do - 本地优先的个人任务与备忘录管理软件"
 authors = ["Local To Do"]
 edition = "2021"
