@@ -261,7 +261,9 @@ fn completing_recurring_with_fired_notice_finishes_current_cycle() {
     insert_fired(&conn, &task.id);
 
     // 情况 A：存在待处理提醒 → 完成当前周期，次数与时间不变
-    assert!(repo::complete_task(&conn, &task.id, true).unwrap().is_none());
+    assert!(repo::complete_task(&conn, &task.id, true)
+        .unwrap()
+        .is_none());
     let done = repo::get_task(&conn, &task.id).unwrap();
     assert!(done.is_completed);
     assert_eq!(done.recurrence_count, 0);
@@ -662,7 +664,9 @@ fn migration_from_v1_adds_list_deleted_at() {
     }
     let db = Db::open(&path).unwrap();
     let conn = db.lock();
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(version, 5);
     let has_col: i64 = conn
         .query_row(
@@ -1159,7 +1163,10 @@ fn sync_task_lifecycle_events() {
     let task = repo::create_task(&conn, &make_input(&conn, "同步任务")).unwrap();
 
     let log = last_log(&conn);
-    assert_eq!((log.0.as_str(), log.1.as_str(), log.2.as_str()), ("task", task.id.as_str(), "upsert"));
+    assert_eq!(
+        (log.0.as_str(), log.1.as_str(), log.2.as_str()),
+        ("task", task.id.as_str(), "upsert")
+    );
     let payload = payload_of(&log);
     assert_eq!(payload["title"], "同步任务");
     assert_eq!(payload["isCompleted"], false);
@@ -1188,7 +1195,10 @@ fn sync_task_lifecycle_events() {
 
     repo::delete_task(&conn, &task.id, "single").unwrap();
     let log = last_log(&conn);
-    assert_eq!((log.0.as_str(), log.1.as_str(), log.2.as_str()), ("task", task.id.as_str(), "delete"));
+    assert_eq!(
+        (log.0.as_str(), log.1.as_str(), log.2.as_str()),
+        ("task", task.id.as_str(), "delete")
+    );
     assert!(log.3.is_none());
 
     repo::restore_task(&conn, &task.id).unwrap();
@@ -1362,7 +1372,11 @@ fn sync_purge_and_empty_deleted_events() {
     repo::empty_deleted(&conn).unwrap();
     assert_eq!(count_logs(&conn, "task", &t2.id, "delete"), 2);
     let remaining: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE deleted_at IS NOT NULL", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE deleted_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(remaining, 0);
 }
@@ -1412,7 +1426,10 @@ fn sync_snapshot_then_incremental_has_no_gap() {
 
     // 断点续传：游标推进后不再重复返回
     let last_rev = changes.changes.last().unwrap().rev;
-    assert!(sync::changes_since(&conn, last_rev, None).unwrap().changes.is_empty());
+    assert!(sync::changes_since(&conn, last_rev, None)
+        .unwrap()
+        .changes
+        .is_empty());
 }
 
 #[test]
@@ -1429,7 +1446,8 @@ fn sync_changes_idempotent_and_paginated() {
     assert_eq!(first.changes.len(), 2);
     assert!(first.has_more);
     let again = sync::changes_since(&conn, 0, Some(2)).unwrap();
-    let revs = |r: &ltd_core::sync::SyncChanges| r.changes.iter().map(|c| c.rev).collect::<Vec<_>>();
+    let revs =
+        |r: &ltd_core::sync::SyncChanges| r.changes.iter().map(|c| c.rev).collect::<Vec<_>>();
     assert_eq!(revs(&first), revs(&again));
 
     let mut since = 0i64;
@@ -1469,7 +1487,8 @@ fn sync_refresh_reminders_logs_only_when_changed() {
     ltd_core::db::refresh_all_reminders(&conn).unwrap();
     assert_eq!(sync::current_rev(&conn).unwrap(), rev);
 
-    conn.execute("UPDATE tasks SET reminder_at = 1 WHERE id=?1", [&task.id]).unwrap();
+    conn.execute("UPDATE tasks SET reminder_at = 1 WHERE id=?1", [&task.id])
+        .unwrap();
     ltd_core::db::refresh_all_reminders(&conn).unwrap();
     let changes = sync::changes_since(&conn, rev, None).unwrap();
     assert!(changes
@@ -1492,7 +1511,9 @@ fn sync_migration_v4_to_v5_backs_up_and_keeps_data() {
 
     let db = Db::open(&path).unwrap();
     let conn = db.lock();
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(version, 5);
     let has_log: i64 = conn
         .query_row(
@@ -1553,7 +1574,60 @@ fn sync_backup_restore_writes_reset_marker() {
     let mut conn2 = db.lock();
     crate::backup::restore_from_json(&mut conn2, &json_path).unwrap();
     let log = last_log(&conn2);
-    assert_eq!((log.0.as_str(), log.1.as_str(), log.2.as_str()), ("*", "*", "reset"));
+    assert_eq!(
+        (log.0.as_str(), log.1.as_str(), log.2.as_str()),
+        ("*", "*", "reset")
+    );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn backup_now_writes_consistent_json_and_sqlite_snapshots() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(&conn, &make_input(&conn, "数据库快照任务")).unwrap();
+    repo::add_step(&conn, &task.id, "快照步骤").unwrap();
+    repo::create_note(&conn, "快照笔记", "快照正文").unwrap();
+    let dir = temp_dir("snapshot");
+
+    let entry = crate::backup::backup_now(&dir, &conn).unwrap();
+    let json_path = std::path::PathBuf::from(&entry.path);
+    let db_path = json_path.with_extension("db");
+    assert!(json_path.exists());
+    assert!(db_path.exists());
+    let bundle: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+    assert_eq!(bundle["format"], "local-to-do-backup");
+    assert_eq!(bundle["data"]["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(bundle["data"]["task_steps"].as_array().unwrap().len(), 1);
+    assert_eq!(bundle["data"]["notes"].as_array().unwrap().len(), 1);
+
+    let snapshot = Connection::open(&db_path).unwrap();
+    let integrity: String = snapshot
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    let title: String = snapshot
+        .query_row("SELECT title FROM tasks WHERE id=?1", [&task.id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(title, "数据库快照任务");
+    let steps: i64 = snapshot
+        .query_row(
+            "SELECT COUNT(*) FROM task_steps WHERE task_id=?1",
+            [&task.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(steps, 1);
+    assert!(ltd_core::db::load_settings(&conn)
+        .unwrap()
+        .last_backup_at
+        .is_some());
+
+    drop(snapshot);
+    drop(conn);
     let _ = std::fs::remove_dir_all(&dir);
 }

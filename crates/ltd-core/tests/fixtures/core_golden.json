@@ -1,0 +1,245 @@
+{
+  "recurrences": [
+    {
+      "name": "每三天跨月跨年且 nth 不累积漂移",
+      "rule": { "kind": "daily", "interval": 3, "weekdays": [], "monthDay": null, "baseDate": "2026-12-30" },
+      "occurrences": ["2026-12-30", "2027-01-02", "2027-01-05", "2027-01-08"],
+      "nthChecks": [{ "n": 10, "expected": "2027-01-29" }],
+      "nextAfter": [{ "after": "2026-12-31", "expected": "2027-01-02" }],
+      "indexOf": [{ "target": "2027-01-03", "expected": 2 }],
+      "nonMatches": ["2026-12-31", "2027-01-01"]
+    },
+    {
+      "name": "工作日从周末基准日开始并跳过周末",
+      "rule": { "kind": "weekdays", "interval": 1, "weekdays": [], "monthDay": null, "baseDate": "2026-11-07" },
+      "occurrences": ["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-16"],
+      "nthChecks": [],
+      "nextAfter": [{ "after": "2026-11-13", "expected": "2026-11-16" }],
+      "indexOf": [],
+      "nonMatches": ["2026-11-07", "2026-11-08", "2026-11-14"]
+    },
+    {
+      "name": "间隔周以周一为基准且基准日不必命中星期集合",
+      "rule": { "kind": "weekly", "interval": 2, "weekdays": [1, 5], "monthDay": null, "baseDate": "2026-11-04" },
+      "occurrences": ["2026-11-06", "2026-11-16", "2026-11-20", "2026-11-30", "2026-12-04"],
+      "nthChecks": [{ "n": 5, "expected": "2026-12-14" }],
+      "nextAfter": [{ "after": "2026-11-07", "expected": "2026-11-16" }],
+      "indexOf": [
+        { "target": "2026-11-04", "expected": 0 },
+        { "target": "2026-11-07", "expected": 1 }
+      ],
+      "nonMatches": ["2026-11-04", "2026-11-09", "2026-11-13"]
+    },
+    {
+      "name": "自定义间隔周保留基准周并跳过基准日前日期",
+      "rule": { "kind": "custom", "interval": 2, "weekdays": [1, 3, 5], "monthDay": null, "baseDate": "2026-11-08" },
+      "occurrences": ["2026-11-16", "2026-11-18", "2026-11-20", "2026-11-30"],
+      "nthChecks": [],
+      "nextAfter": [{ "after": "2026-11-08", "expected": "2026-11-16" }],
+      "indexOf": [],
+      "nonMatches": ["2026-11-09", "2026-11-11"]
+    },
+    {
+      "name": "每月三十一日按当月最后一天收敛",
+      "rule": { "kind": "monthly", "interval": 1, "weekdays": [], "monthDay": 31, "baseDate": "2026-01-31" },
+      "occurrences": ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31"],
+      "nthChecks": [{ "n": 11, "expected": "2026-12-31" }],
+      "nextAfter": [{ "after": "2026-02-28", "expected": "2026-03-31" }],
+      "indexOf": [{ "target": "2026-03-15", "expected": 2 }],
+      "nonMatches": ["2026-01-30", "2026-02-27", "2026-03-30"]
+    },
+    {
+      "name": "间隔月同时应用月序和月末收敛",
+      "rule": { "kind": "monthly", "interval": 3, "weekdays": [], "monthDay": 31, "baseDate": "2026-01-31" },
+      "occurrences": ["2026-01-31", "2026-04-30", "2026-07-31", "2026-10-31", "2027-01-31"],
+      "nthChecks": [],
+      "nextAfter": [{ "after": "2026-02-01", "expected": "2026-04-30" }],
+      "indexOf": [{ "target": "2026-02-01", "expected": 1 }],
+      "nonMatches": ["2026-02-28", "2026-03-31", "2026-05-31"]
+    },
+    {
+      "name": "自定义月内日期遵循间隔月",
+      "rule": { "kind": "custom", "interval": 2, "weekdays": [], "monthDay": 31, "baseDate": "2026-01-31" },
+      "occurrences": ["2026-01-31", "2026-03-31", "2026-05-31", "2026-07-31"],
+      "nthChecks": [],
+      "nextAfter": [{ "after": "2026-02-28", "expected": "2026-03-31" }],
+      "indexOf": [],
+      "nonMatches": ["2026-02-28", "2026-04-30"]
+    },
+    {
+      "name": "自定义间隔天跨月",
+      "rule": { "kind": "custom", "interval": 10, "weekdays": [], "monthDay": null, "baseDate": "2026-02-20" },
+      "occurrences": ["2026-02-20", "2026-03-02", "2026-03-12", "2026-03-22", "2026-04-01"],
+      "nthChecks": [],
+      "nextAfter": [{ "after": "2026-02-28", "expected": "2026-03-02" }],
+      "indexOf": [],
+      "nonMatches": ["2026-02-28", "2026-03-01"]
+    },
+    {
+      "name": "闰日年度重复在平年收敛到二月二十八日",
+      "rule": { "kind": "yearly", "interval": 1, "weekdays": [], "monthDay": null, "baseDate": "2024-02-29" },
+      "occurrences": ["2024-02-29", "2025-02-28", "2026-02-28", "2027-02-28", "2028-02-29", "2029-02-28"],
+      "nthChecks": [],
+      "nextAfter": [{ "after": "2027-02-28", "expected": "2028-02-29" }],
+      "indexOf": [],
+      "nonMatches": ["2025-03-01", "2026-02-27"]
+    },
+    {
+      "name": "世纪规则二千年闰二一零零年不闰二四零零年闰",
+      "rule": { "kind": "yearly", "interval": 1, "weekdays": [], "monthDay": null, "baseDate": "2000-02-29" },
+      "occurrences": ["2000-02-29", "2001-02-28", "2002-02-28", "2003-02-28", "2004-02-29"],
+      "nthChecks": [
+        { "n": 100, "expected": "2100-02-28" },
+        { "n": 104, "expected": "2104-02-29" },
+        { "n": 400, "expected": "2400-02-29" }
+      ],
+      "nextAfter": [
+        { "after": "2099-02-28", "expected": "2100-02-28" },
+        { "after": "2100-02-28", "expected": "2101-02-28" },
+        { "after": "2103-02-28", "expected": "2104-02-29" }
+      ],
+      "indexOf": [],
+      "nonMatches": ["2100-02-27", "2100-03-01"]
+    },
+    {
+      "name": "长期间隔 nth 可计算而 next_after 保持七千三百二十天上限",
+      "rule": { "kind": "yearly", "interval": 100, "weekdays": [], "monthDay": null, "baseDate": "2000-01-01" },
+      "occurrences": ["2000-01-01", "2100-01-01", "2200-01-01"],
+      "nthChecks": [],
+      "nextAfter": [{ "after": "2000-01-01", "expected": null }],
+      "indexOf": [],
+      "nonMatches": ["2001-01-01"]
+    },
+    {
+      "name": "未知规则不命中也不产生日期",
+      "rule": { "kind": "unknown", "interval": 1, "weekdays": [], "monthDay": null, "baseDate": "2026-01-01" },
+      "occurrences": [],
+      "nthChecks": [{ "n": 0, "expected": null }],
+      "nextAfter": [{ "after": "2026-01-01", "expected": null }],
+      "indexOf": [],
+      "nonMatches": ["2026-01-01"]
+    }
+  ],
+  "reminders": [
+    {
+      "name": "上海准时提醒",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2026-11-23",
+      "dueTime": "20:30",
+      "offsetMinutes": 0,
+      "expectedUtc": "2026-11-23T12:30:00Z"
+    },
+    {
+      "name": "提前二十分钟",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2026-11-23",
+      "dueTime": "20:30",
+      "offsetMinutes": 20,
+      "expectedUtc": "2026-11-23T12:10:00Z"
+    },
+    {
+      "name": "未填时间默认九点",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2026-11-23",
+      "dueTime": null,
+      "offsetMinutes": 0,
+      "expectedUtc": "2026-11-23T01:00:00Z"
+    },
+    {
+      "name": "自定义提前一天三小时十五分跨月",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2026-03-01",
+      "dueTime": "09:00",
+      "offsetMinutes": 1635,
+      "expectedUtc": "2026-02-27T21:45:00Z"
+    },
+    {
+      "name": "提前提醒跨日跨年",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2027-01-01",
+      "dueTime": "00:15",
+      "offsetMinutes": 20,
+      "expectedUtc": "2026-12-31T15:55:00Z"
+    },
+    {
+      "name": "相同时钟在纽约产生不同 UTC 时间",
+      "timezone": "America/New_York",
+      "dueDate": "2026-11-23",
+      "dueTime": "20:30",
+      "offsetMinutes": 0,
+      "expectedUtc": "2026-11-24T01:30:00Z"
+    },
+    {
+      "name": "春季 DST 不存在的本地时间无提醒",
+      "timezone": "America/New_York",
+      "dueDate": "2026-03-08",
+      "dueTime": "02:30",
+      "offsetMinutes": 0,
+      "expectedUtc": null
+    },
+    {
+      "name": "秋季 DST 重复本地时间取较早一次",
+      "timezone": "America/New_York",
+      "dueDate": "2026-11-01",
+      "dueTime": "01:30",
+      "offsetMinutes": 0,
+      "expectedUtc": "2026-11-01T05:30:00Z"
+    },
+    {
+      "name": "春季到期时间减去提前量可落到 DST 缺口之前",
+      "timezone": "America/New_York",
+      "dueDate": "2026-03-08",
+      "dueTime": "03:30",
+      "offsetMinutes": 60,
+      "expectedUtc": "2026-03-08T06:30:00Z"
+    },
+    {
+      "name": "秋季到期时间减提前量可落到第二次重复时刻",
+      "timezone": "America/New_York",
+      "dueDate": "2026-11-01",
+      "dueTime": "03:30",
+      "offsetMinutes": 120,
+      "expectedUtc": "2026-11-01T06:30:00Z"
+    },
+    {
+      "name": "负提前量按零处理",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2026-11-23",
+      "dueTime": "20:30",
+      "offsetMinutes": -30,
+      "expectedUtc": "2026-11-23T12:30:00Z"
+    },
+    {
+      "name": "非法时间沿用默认九点行为",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2026-11-23",
+      "dueTime": "25:00",
+      "offsetMinutes": 0,
+      "expectedUtc": "2026-11-23T01:00:00Z"
+    },
+    {
+      "name": "东京提前一小时使 UTC 回到上一年",
+      "timezone": "Asia/Tokyo",
+      "dueDate": "2026-01-01",
+      "dueTime": "08:00",
+      "offsetMinutes": 60,
+      "expectedUtc": "2025-12-31T22:00:00Z"
+    },
+    {
+      "name": "无到期日期不提醒",
+      "timezone": "Asia/Shanghai",
+      "dueDate": null,
+      "dueTime": "09:00",
+      "offsetMinutes": 0,
+      "expectedUtc": null
+    },
+    {
+      "name": "无提醒方案不提醒",
+      "timezone": "Asia/Shanghai",
+      "dueDate": "2026-11-23",
+      "dueTime": "09:00",
+      "offsetMinutes": null,
+      "expectedUtc": null
+    }
+  ]
+}

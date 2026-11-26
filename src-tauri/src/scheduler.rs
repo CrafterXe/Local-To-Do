@@ -11,8 +11,6 @@ use ltd_core::{db, domain, repo};
 use crate::state::AppState;
 use crate::{backup, logging};
 
-/// 超过该时长未触发的提醒视为「错过」，不再弹出打扰性通知
-const MISSED_GRACE_MS: i64 = 24 * 3600 * 1000;
 const CHECK_INTERVAL_MS: i64 = 20_000;
 const BACKUP_CHECK_INTERVAL_MS: i64 = 30 * 60 * 1000;
 
@@ -31,13 +29,7 @@ pub struct FiredReminderEvent {
 /// 发送 Windows 原生通知
 pub fn send_notification(app: &AppHandle, title: &str, body: &str) -> bool {
     use tauri_plugin_notification::NotificationExt;
-    match app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-    {
+    match app.notification().builder().title(title).body(body).show() {
         Ok(_) => true,
         Err(e) => {
             logging::warn(format!("通知发送失败: {e}"));
@@ -123,22 +115,26 @@ fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
     for r in due {
         {
             let conn = state.db.lock();
-            if r.is_completed || r.is_deleted || r.reminder_changed {
-                repo::mark_schedule(&conn, &r.schedule_id, "cancelled", now)?;
-                logging::info(format!("提醒计划失效，已取消: {}", r.title));
-                continue;
+            match domain::reminder_disposition(&r, now) {
+                domain::ReminderDisposition::Cancel => {
+                    repo::mark_schedule(&conn, &r.schedule_id, "cancelled", now)?;
+                    logging::info(format!("提醒计划失效，已取消: {}", r.title));
+                    continue;
+                }
+                domain::ReminderDisposition::Missed => {
+                    repo::mark_schedule(&conn, &r.schedule_id, "missed", now)?;
+                    logging::warn(format!(
+                        "提醒已错过超过 24 小时，不再弹窗: {} ({})",
+                        r.title,
+                        domain::format_trigger(r.trigger_at)
+                    ));
+                    continue;
+                }
+                domain::ReminderDisposition::Fire => {
+                    // 先标记已触发，保证同一条提醒不会重复弹出
+                    repo::mark_schedule(&conn, &r.schedule_id, "fired", now)?;
+                }
             }
-            if now - r.trigger_at > MISSED_GRACE_MS {
-                repo::mark_schedule(&conn, &r.schedule_id, "missed", now)?;
-                logging::warn(format!(
-                    "提醒已错过超过 24 小时，不再弹窗: {} ({})",
-                    r.title,
-                    domain::format_trigger(r.trigger_at)
-                ));
-                continue;
-            }
-            // 先标记已触发，保证同一条提醒不会重复弹出
-            repo::mark_schedule(&conn, &r.schedule_id, "fired", now)?;
         }
 
         let due_text = match (&r.due_date, &r.due_time) {
@@ -151,7 +147,7 @@ fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
         } else {
             format!("{due_text} · {}", r.list_name)
         };
-        let late = now - r.trigger_at > 120_000;
+        let late = domain::reminder_is_late(r.trigger_at, now);
         let body = if late {
             format!("（延迟提醒）{body}")
         } else {
@@ -161,7 +157,11 @@ fn tick(app: &AppHandle, state: &Arc<AppState>, now: i64) -> AppResult<()> {
         // 提醒是否触发由任务自身的开关决定，不再依赖全局通知开关
         let ok = send_notification(app, &r.title, &body);
         if ok {
-            logging::info(format!("已发送提醒通知: {} @ {}", r.title, domain::format_trigger(r.trigger_at)));
+            logging::info(format!(
+                "已发送提醒通知: {} @ {}",
+                r.title,
+                domain::format_trigger(r.trigger_at)
+            ));
         }
         // 应用自身播放提示音：不依赖 toast 的自定义声音能力
         if sound_enabled {

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::error::{AppResult, AppError};
+use crate::error::{AppError, AppResult};
 use crate::models::AppSettings;
 
 /// SQLite 连接封装。使用单连接 + 互斥锁，保证本地单用户场景下的一致性。
@@ -65,8 +65,7 @@ impl Db {
         Ok(db)
     }
 
-    /// 内存数据库（测试用，需开启 test-utils 特性）
-    #[cfg(any(test, feature = "test-utils"))]
+    /// 内存数据库，供 Core 独立测试和各平台临时业务验证使用。
     pub fn open_memory() -> AppResult<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -276,7 +275,9 @@ fn consolidate_recurrences(conn: &Connection) -> AppResult<()> {
          ORDER BY created ASC",
     )?;
     let rows: Vec<(String, String, String, i64, i64)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(stmt);
 
@@ -319,7 +320,13 @@ fn consolidate_recurrences(conn: &Connection) -> AppResult<()> {
                     .split(',')
                     .filter_map(|s| s.trim().parse::<u32>().ok())
                     .collect();
-                let rule = Rule::new(&kind, interval.max(1), wd, month_day.map(|m| m as u32), base);
+                let rule = Rule::new(
+                    &kind,
+                    interval.max(1),
+                    wd,
+                    month_day.map(|m| m as u32),
+                    base,
+                );
                 count = rule.index_of(target);
                 if let Some(d) = rule.nth(count) {
                     due = d.format("%Y-%m-%d").to_string();
@@ -367,8 +374,11 @@ fn seed(conn: &Connection) -> AppResult<()> {
         };
         save_settings(conn, &defaults)?;
     } else {
-        let has_settings: i64 =
-            conn.query_row("SELECT COUNT(*) FROM app_settings WHERE key='theme'", [], |r| r.get(0))?;
+        let has_settings: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM app_settings WHERE key='theme'",
+            [],
+            |r| r.get(0),
+        )?;
         if has_settings == 0 {
             save_settings(conn, &AppSettings::default())?;
         }
@@ -380,13 +390,27 @@ fn seed(conn: &Connection) -> AppResult<()> {
 pub fn refresh_all_reminders(conn: &Connection) -> AppResult<()> {
     use crate::domain::compute_reminder_at;
     crate::repo::in_tx(conn, |conn| {
-        let rows: Vec<(String, Option<String>, Option<String>, Option<i64>, i64, Option<i64>)> = {
+        let rows: Vec<(
+            String,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+            i64,
+            Option<i64>,
+        )> = {
             let mut stmt = conn.prepare(
                 "SELECT id, due_date, due_time, reminder_offset, reminder_enabled, reminder_at
                  FROM tasks WHERE is_completed = 0 AND deleted_at IS NULL",
             )?;
             let rows = stmt.query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?;
             rows.collect::<Result<_, _>>()?
         };
@@ -478,12 +502,16 @@ pub fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
         .collect::<Result<_, _>>()?;
     for (k, v) in rows {
         match k.as_str() {
-            "theme" => s.theme = if v == "light" { "light".into() } else { "dark".into() },
+            "theme" => {
+                s.theme = if v == "light" {
+                    "light".into()
+                } else {
+                    "dark".into()
+                }
+            }
             "notifications_enabled" => s.notifications_enabled = v == "1",
             "sound_enabled" => s.sound_enabled = v == "1",
-            "sound_path" => {
-                s.sound_path = if v.trim().is_empty() { None } else { Some(v) }
-            }
+            "sound_path" => s.sound_path = if v.trim().is_empty() { None } else { Some(v) },
             "close_to_tray" => s.close_to_tray = v == "1",
             "autostart" => s.autostart = v == "1",
             "start_minimized" => s.start_minimized = v == "1",
@@ -492,14 +520,10 @@ pub fn load_settings(conn: &Connection) -> AppResult<AppSettings> {
                 s.auto_backup_interval_hours = v.parse().unwrap_or(24).max(1)
             }
             "last_backup_at" => s.last_backup_at = v.parse::<i64>().ok(),
-            "default_list_id" => {
-                s.default_list_id = if v.is_empty() { None } else { Some(v) }
-            }
+            "default_list_id" => s.default_list_id = if v.is_empty() { None } else { Some(v) },
             "timezone_auto" => s.timezone_auto = v != "0",
             "timezone" => s.timezone = if v.trim().is_empty() { None } else { Some(v) },
-            "week_base_date" => {
-                s.week_base_date = if v.trim().is_empty() { None } else { Some(v) }
-            }
+            "week_base_date" => s.week_base_date = if v.trim().is_empty() { None } else { Some(v) },
             "week_customized" => s.week_customized = v == "1",
             _ => {}
         }
