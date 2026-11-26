@@ -226,6 +226,55 @@ export interface View {
   date?: string;
 }
 
+/** Android 只读同步客户端的连接信息（不含令牌） */
+export interface MobileConnectionInfo {
+  host: string;
+  port: number;
+  fingerprint: string;
+  protocolVersion: string;
+  deviceId: string;
+  deviceName: string;
+  pairedAt: number;
+}
+
+export type MobileSyncPhase =
+  | "unpaired"
+  | "pairing"
+  | "paired"
+  | "firstSync"
+  | "syncing"
+  | "synced"
+  | "offline"
+  | "failed"
+  | "needsPairing";
+
+export interface MobileSyncCounts {
+  lists: number;
+  tasks: number;
+  recurrences: number;
+  steps: number;
+}
+
+export interface MobileSyncState {
+  paired: boolean;
+  connection: MobileConnectionInfo | null;
+  phase: MobileSyncPhase;
+  lastSyncAt: number | null;
+  lastRev: number;
+  needsSnapshot: boolean;
+  counts: MobileSyncCounts;
+  error: string | null;
+}
+
+export interface MobilePairingPreview {
+  host: string;
+  port: number;
+  fingerprint: string;
+  expiresAt: number;
+  protocolVersion: string;
+  expired: boolean;
+}
+
 export const api = {
   listLists: () => invoke<TaskList[]>("list_lists"),
   createList: (name: string, color: string, icon = "") =>
@@ -311,4 +360,12 @@ export const api = {
   syncListDevices: () => invoke<SyncDevice[]>("sync_list_devices"),
   syncRevokeDevice: (id: string) => invoke<SyncDevice[]>("sync_revoke_device", { id }),
   syncResetPairing: () => invoke<SyncStatus>("sync_reset_pairing"),
+
+  mobileSyncState: () => invoke<MobileSyncState>("mobile_sync_state"),
+  mobileInspectPairing: (payload: string) =>
+    invoke<MobilePairingPreview>("mobile_inspect_pairing", { payload }),
+  mobilePair: (payload: string, deviceName: string) =>
+    invoke<MobileSyncState>("mobile_pair", { payload, deviceName }),
+  mobileSyncNow: () => invoke<MobileSyncState>("mobile_sync_now"),
+  mobileUnpair: () => invoke<MobileSyncState>("mobile_unpair"),
 };

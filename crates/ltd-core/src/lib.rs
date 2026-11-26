@@ -6,6 +6,7 @@
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod mirror;
 pub mod models;
 pub mod repo;
 pub mod sync;

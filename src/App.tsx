@@ -25,6 +25,7 @@ import { SettingsView } from "./components/SettingsView";
 import { HistoryView } from "./components/HistoryView";
 import { ListModal } from "./components/ListModal";
 import { ConfirmModal } from "./components/Modal";
+import { MobileSyncApp } from "./mobile/MobileSyncApp";
 import { IconBell, IconCalendar, IconPlus, IconRefresh } from "./components/Icons";
 import {
   currentWeekNumber,
@@ -62,7 +63,7 @@ function readSort(key: string): SortKind {
   }
 }
 
-export default function App() {
+function DesktopApp() {
   const [lists, setLists] = useState<TaskListModel[]>([]);
   const [counts, setCounts] = useState<SidebarCounts | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -1025,4 +1026,12 @@ export default function App() {
       {toast && <div className={`toast ${toast.error ? "error" : ""}`}>{toast.msg}</div>}
     </div>
   );
+}
+
+function isAndroid(): boolean {
+  return typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+}
+
+export default function App() {
+  return isAndroid() ? <MobileSyncApp /> : <DesktopApp />;
 }

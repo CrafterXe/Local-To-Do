@@ -44,6 +44,7 @@ rand = "0.8"
 hex = "0.4"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 tower-http = { version = "0.6", features = ["timeout"] }
+tauri-plugin-barcode-scanner = "2"
 
 [dev-dependencies]
 ltd-core = { path = "../crates/ltd-core", features = ["test-utils"] }
@@ -54,3 +55,8 @@ tauri = { version = "2", features = ["tray-icon"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_System_Registry", "Win32_Foundation", "Win32_Security", "Win32_Media_Audio"] }
+
+# Android 安全存储：通过 JNI 调用 Android Keystore 与 SharedPreferences
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"

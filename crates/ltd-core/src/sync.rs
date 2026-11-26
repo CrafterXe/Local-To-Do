@@ -10,7 +10,7 @@
 //! 本模块只处理数据，不涉及网络与设备管理。
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::AppResult;
@@ -28,7 +28,7 @@ pub const OP_RESET: &str = "reset";
 const DEFAULT_CHANGE_LIMIT: i64 = 500;
 
 /// 同步日志中的清单行（不含统计字段）
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListRow {
     pub id: String,
@@ -41,7 +41,7 @@ pub struct ListRow {
 }
 
 /// 同步日志中的重复规则行
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecurrenceRow {
     pub id: String,
@@ -54,7 +54,7 @@ pub struct RecurrenceRow {
 }
 
 /// 同步日志中的任务行（步骤与重复规则作为独立实体同步）
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRow {
     pub id: String,
@@ -81,7 +81,7 @@ pub struct TaskRow {
 }
 
 /// 同步日志中的任务步骤行
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepRow {
     pub id: String,
@@ -92,7 +92,7 @@ pub struct StepRow {
 }
 
 /// 一次性全量快照。`rev` 与所有数据来自同一个只读事务。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncSnapshot {
     pub rev: i64,
@@ -103,7 +103,7 @@ pub struct SyncSnapshot {
 }
 
 /// 单条增量变更
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncChange {
     pub rev: i64,
@@ -115,7 +115,7 @@ pub struct SyncChange {
 }
 
 /// 增量查询结果
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncChanges {
     /// 查询时数据库中的最大 rev，不代表已全部返回

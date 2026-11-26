@@ -4,6 +4,7 @@ mod logging;
 mod scheduler;
 mod sound;
 mod state;
+mod sync_client;
 mod sync_server;
 
 #[cfg(test)]
@@ -43,10 +44,16 @@ pub fn run() {
             Some(vec!["--autostart"]),
         ));
 
-    builder
+    let builder = builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+
+    // 扫码插件仅在移动端可用，桌面端不注册
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+
+    let builder = builder
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -100,6 +107,8 @@ pub fn run() {
 
             #[cfg(desktop)]
             setup_tray(app.handle())?;
+            // Android 端本阶段不启动提醒调度器（原生提醒属后续阶段）
+            #[cfg(desktop)]
             scheduler::spawn(app.handle().clone(), state.clone());
             logging::info(format!(
                 "应用启动：数据目录 {}，数据库 {}",
@@ -190,7 +199,19 @@ pub fn run() {
             commands::sync_list_devices,
             commands::sync_revoke_device,
             commands::sync_reset_pairing,
-        ])
+        ]);
+
+    // Android 只注册只读同步命令，不暴露任何任务写接口
+    #[cfg(mobile)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        sync_client::commands::mobile_sync_state,
+        sync_client::commands::mobile_inspect_pairing,
+        sync_client::commands::mobile_pair,
+        sync_client::commands::mobile_sync_now,
+        sync_client::commands::mobile_unpair,
+    ]);
+
+    builder
         .build(tauri::generate_context!())
         .expect("Local To Do 启动失败")
         .run(|app_handle, event| {
