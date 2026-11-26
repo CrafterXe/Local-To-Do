@@ -10,6 +10,7 @@ import {
 } from "../api";
 import { formatBytes, formatRelative, formatTimestamp } from "../utils/date";
 import { ConfirmModal } from "./Modal";
+import { DesktopGuide } from "./DesktopGuide";
 import { SyncSettings } from "./SyncSettings";
 import {
   IconBell,
@@ -377,6 +378,8 @@ export function SettingsView({
       </section>
 
       <SyncSettings notify={notify} />
+
+      <DesktopGuide />
 
       <section className="settings-section">
         <h2 className="settings-title">数据与备份</h2>

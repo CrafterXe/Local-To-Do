@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: dark;
 }
 
@@ -3233,3 +3233,141 @@ select {
   transform: translateX(18px);
 }
 
+
+/* ---- 后台提醒设置 ---- */
+.mobile-reminder-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--panel-alt);
+}
+
+.mobile-reminder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.mobile-reminder-row strong {
+  font-weight: 600;
+  color: var(--text);
+  text-align: right;
+}
+
+.mobile-warn-text {
+  color: #e5a23a !important;
+}
+
+.mobile-setting-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 4px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+}
+
+/* ---- 使用说明（手机） ---- */
+.mobile-guide-panel {
+  max-height: 88vh;
+}
+
+.mobile-guide-body {
+  padding-bottom: 32px;
+}
+
+.mobile-guide-section {
+  margin-bottom: 18px;
+}
+
+.mobile-guide-section h3 {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mobile-guide-section p {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.mobile-guide-section ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.mobile-guide-section li {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.mobile-guide-note {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-alt);
+  font-size: 12px !important;
+}
+
+/* ---- 使用说明（Windows） ---- */
+.guide-panel {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-alt);
+}
+
+.guide-section {
+  margin-bottom: 14px;
+}
+
+.guide-section:last-child {
+  margin-bottom: 0;
+}
+
+.guide-section h3 {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.guide-section p {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.guide-section ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.guide-section li {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.guide-note {
+  font-size: 11.5px !important;
+  color: var(--muted-2) !important;
+}
