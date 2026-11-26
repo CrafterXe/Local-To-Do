@@ -27,6 +27,8 @@ use tauri_plugin_window_state::StateFlags;
 
 use state::AppState;
 
+// 移动端入口：生成 Android JNI 导出并调用 run()。桌面端此标注不生效。
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
