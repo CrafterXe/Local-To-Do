@@ -223,6 +223,10 @@ pub fn run() {
         sync_client::commands::mobile_calendar,
         sync_client::commands::mobile_settings_get,
         sync_client::commands::mobile_settings_update,
+        sync_client::commands::mobile_reminders_resync,
+        sync_client::commands::mobile_reminder_status,
+        sync_client::commands::mobile_reminder_open_exact_alarm_settings,
+        sync_client::commands::mobile_reminder_open_battery_settings,
     ]);
 
     builder

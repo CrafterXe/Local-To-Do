@@ -195,6 +195,11 @@ impl MobileSyncService {
         Ok(self.mirror()?.lists()?)
     }
 
+    /// 提醒候选行（只读镜像，供后台提醒调度使用）
+    pub fn reminder_candidates(&self) -> SyncResult<Vec<ltd_core::mirror_read::MirrorReminderRow>> {
+        Ok(self.mirror()?.reminder_candidates()?)
+    }
+
     pub fn tasks(&self, query: &MirrorTaskQuery) -> SyncResult<Vec<Task>> {
         Ok(self.mirror()?.tasks(query)?)
     }

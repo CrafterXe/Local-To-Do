@@ -78,6 +78,11 @@ export function MobileSyncApp() {
     }
   }, []);
 
+  // 打开应用时按本地镜像重建提醒：即使离线、无法同步，也能恢复已同步任务的提醒
+  useEffect(() => {
+    void api.mobileRemindersResync().catch(() => {});
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);

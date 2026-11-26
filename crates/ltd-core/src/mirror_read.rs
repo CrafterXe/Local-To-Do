@@ -30,11 +30,55 @@ pub struct MirrorTaskQuery {
     pub include_completed: Option<bool>,
 }
 
+/// 一条可用于本地提醒调度的镜像行（只读取，不修改任何数据）
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirrorReminderRow {
+    pub task_id: String,
+    pub title: String,
+    pub list_name: String,
+    pub due_date: Option<String>,
+    pub due_time: Option<String>,
+    /// Windows 端计算好的提醒时间（UTC 毫秒）
+    pub reminder_at: i64,
+}
+
 impl MirrorDb {
     /// 全部未删除清单（含待办/总数统计）
     pub fn lists(&self) -> AppResult<Vec<TaskList>> {
         let conn = self.lock();
         crate::repo::lists::all_lists(&conn)
+    }
+
+    /// 提醒候选：未完成、未删除、开启提醒且有提醒时间的任务。
+    ///
+    /// 提醒时间由 Windows 端共享核心计算后随同步下发，Android 不重复实现重复规则，
+    /// 只负责按该时间注册系统闹钟。
+    pub fn reminder_candidates(&self) -> AppResult<Vec<MirrorReminderRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.title, COALESCE(l.name, ''), t.due_date, t.due_time, t.reminder_at
+             FROM tasks t LEFT JOIN lists l ON l.id = t.list_id
+             WHERE t.is_completed = 0
+               AND t.deleted_at IS NULL
+               AND t.reminder_enabled = 1
+               AND t.reminder_at IS NOT NULL
+             ORDER BY t.reminder_at ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(MirrorReminderRow {
+                task_id: r.get(0)?,
+                title: r.get(1)?,
+                list_name: r.get(2)?,
+                due_date: r.get(3)?,
+                due_time: r.get(4)?,
+                reminder_at: r.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// 单个任务详情（含步骤与重复规则）
@@ -365,6 +409,33 @@ mod tests {
         assert_eq!(lists.len(), 1);
         assert_eq!(lists[0].open_count, 5);
         assert_eq!(lists[0].total_count, 6);
+    }
+
+    #[test]
+    fn reminder_candidates_keep_only_open_enabled_rows() {
+        let mut s = snapshot();
+        s.tasks[0].reminder_enabled = true;
+        s.tasks[0].reminder_at = Some(5_000);
+        // 已完成任务不产生提醒
+        s.tasks[1].reminder_enabled = true;
+        s.tasks[1].reminder_at = Some(6_000);
+        // 已删除任务不产生提醒
+        s.tasks[2].reminder_enabled = true;
+        s.tasks[2].reminder_at = Some(7_000);
+        s.tasks[2].deleted_at = Some(8_000);
+        // 有提醒时间但开关关闭
+        s.tasks[3].reminder_at = Some(9_000);
+        // 开关打开但没有提醒时间
+        s.tasks[4].reminder_enabled = true;
+
+        let db = MirrorDb::open_memory().unwrap();
+        db.apply_snapshot(&s, 100).unwrap();
+        let rows = db.reminder_candidates().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].task_id, "t1");
+        assert_eq!(rows[0].list_name, "工作");
+        assert_eq!(rows[0].reminder_at, 5_000);
+        assert_eq!(rows[0].due_time.as_deref(), Some("09:00"));
     }
 
     #[test]

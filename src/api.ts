@@ -289,6 +289,19 @@ export interface MobileSettings {
   reminderLeadMinutes: number;
 }
 
+/** Android 后台提醒状态（由原生层与本地设置共同决定） */
+export interface ReminderStatus {
+  enabled: boolean;
+  leadMinutes: number;
+  scheduled: number;
+  exactAlarmAllowed: boolean;
+  notificationsAllowed: boolean;
+  ignoringBatteryOptimizations: boolean;
+  skippedPast: number;
+  skippedFar: number;
+  error: string | null;
+}
+
 export const api = {
   listLists: () => invoke<TaskList[]>("list_lists"),
   createList: (name: string, color: string, icon = "") =>
@@ -392,4 +405,10 @@ export const api = {
   mobileSettingsGet: () => invoke<MobileSettings>("mobile_settings_get"),
   mobileSettingsUpdate: (settings: MobileSettings) =>
     invoke<MobileSettings>("mobile_settings_update", { settings }),
+  mobileRemindersResync: () => invoke<ReminderStatus>("mobile_reminders_resync"),
+  mobileReminderStatus: () => invoke<ReminderStatus>("mobile_reminder_status"),
+  mobileReminderOpenExactSettings: () =>
+    invoke<void>("mobile_reminder_open_exact_alarm_settings"),
+  mobileReminderOpenBatterySettings: () =>
+    invoke<void>("mobile_reminder_open_battery_settings"),
 };
