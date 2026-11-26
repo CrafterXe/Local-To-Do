@@ -55,7 +55,12 @@ pub fn run() {
 
     let builder = builder
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            // 仅用于隔离测试：设置 LTD_DATA_DIR 时改用该目录，避免触碰真实用户数据。
+            // 未设置时行为与之前完全一致。
+            let data_dir = match std::env::var("LTD_DATA_DIR") {
+                Ok(dir) if !dir.trim().is_empty() => std::path::PathBuf::from(dir),
+                _ => app.path().app_data_dir()?,
+            };
             std::fs::create_dir_all(&data_dir)?;
             let log_dir = data_dir.join("logs");
             let _ = logging::init(&log_dir);
