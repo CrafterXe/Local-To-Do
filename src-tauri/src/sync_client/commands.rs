@@ -4,10 +4,14 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use ltd_core::mirror_read::MirrorTaskQuery;
+use ltd_core::models::{CalendarDay, Task, TaskList};
+
 use crate::state::AppState;
 
 use super::engine::MobileSyncState;
 use super::pairing::PairingPreview;
+use super::settings::MobileSettings;
 
 #[tauri::command]
 pub fn mobile_sync_state(state: State<'_, Arc<AppState>>) -> MobileSyncState {
@@ -49,4 +53,63 @@ pub async fn mobile_sync_now(
 #[tauri::command]
 pub fn mobile_unpair(state: State<'_, Arc<AppState>>) -> Result<MobileSyncState, String> {
     state.mobile_sync.unpair().map_err(|e| e.to_string())
+}
+
+// ---- 只读数据命令：只查询镜像库，不提供任何业务写入能力 ----
+
+#[tauri::command]
+pub fn mobile_lists(state: State<'_, Arc<AppState>>) -> Result<Vec<TaskList>, String> {
+    state.mobile_sync.lists().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn mobile_tasks(
+    state: State<'_, Arc<AppState>>,
+    query: MirrorTaskQuery,
+) -> Result<Vec<Task>, String> {
+    state.mobile_sync.tasks(&query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn mobile_task(state: State<'_, Arc<AppState>>, id: String) -> Result<Task, String> {
+    state.mobile_sync.task(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn mobile_tasks_for_day(
+    state: State<'_, Arc<AppState>>,
+    date: String,
+) -> Result<Vec<Task>, String> {
+    state
+        .mobile_sync
+        .tasks_for_day(&date)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn mobile_calendar(
+    state: State<'_, Arc<AppState>>,
+    start: String,
+    end: String,
+) -> Result<Vec<CalendarDay>, String> {
+    state
+        .mobile_sync
+        .calendar(&start, &end)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn mobile_settings_get(state: State<'_, Arc<AppState>>) -> MobileSettings {
+    state.mobile_sync.local_settings()
+}
+
+#[tauri::command]
+pub fn mobile_settings_update(
+    state: State<'_, Arc<AppState>>,
+    settings: MobileSettings,
+) -> Result<MobileSettings, String> {
+    state
+        .mobile_sync
+        .update_local_settings(settings)
+        .map_err(|e| e.to_string())
 }

@@ -5,7 +5,8 @@
 //! - `http`：基于 rustls 的最小 HTTPS 客户端；
 //! - `pairing`：二维码解析与校验；
 //! - `secrets`：令牌安全存储（Android Keystore / 开发文件）；
-//! - `engine`：配对、快照、增量、reset 与状态机；
+//! - `engine`：配对、快照、增量、reset、状态机与只读查询；
+//! - `settings`：Android 本地设置（不参与同步）；
 //! - `commands`：Tauri 移动端命令（仅移动端注册）。
 
 // 这些代码在所有平台编译（便于桌面测试），命令仅在移动端注册
@@ -17,6 +18,7 @@ mod http;
 mod pairing;
 mod pinned;
 mod secrets;
+mod settings;
 #[cfg(test)]
 mod tests;
 

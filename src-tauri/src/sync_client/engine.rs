@@ -12,12 +12,15 @@ use serde_json::{json, Value};
 use ltd_core::domain::local_now_ms;
 use ltd_core::error::AppError;
 use ltd_core::mirror::{MirrorCounts, MirrorDb};
+use ltd_core::mirror_read::MirrorTaskQuery;
+use ltd_core::models::{CalendarDay, Task, TaskList};
 use ltd_core::sync::SyncSnapshot;
 
 use super::http::{ClientError, HttpResponse, PinnedHttpClient};
 use super::pairing::{self, PairingPreview};
 use super::pinned::normalize_fingerprint;
 use super::secrets::SecretStore;
+use super::settings::{self, MobileSettings};
 use super::PROTOCOL_VERSION;
 
 /// 单页增量条数（服务端上限 1000，这里取较小值以便及时保存进度）
@@ -184,6 +187,40 @@ impl MobileSyncService {
     pub fn inspect_pairing(&self, payload: &str) -> SyncResult<PairingPreview> {
         pairing::preview(payload, local_now_ms())
             .map_err(|e| SyncError::new(SyncErrorKind::Protocol, e.to_string()))
+    }
+
+    // ---- 只读查询：全部来自镜像库，不提供任何写入途径 ----
+
+    pub fn lists(&self) -> SyncResult<Vec<TaskList>> {
+        Ok(self.mirror()?.lists()?)
+    }
+
+    pub fn tasks(&self, query: &MirrorTaskQuery) -> SyncResult<Vec<Task>> {
+        Ok(self.mirror()?.tasks(query)?)
+    }
+
+    pub fn task(&self, id: &str) -> SyncResult<Task> {
+        Ok(self.mirror()?.task(id)?)
+    }
+
+    pub fn tasks_for_day(&self, date: &str) -> SyncResult<Vec<Task>> {
+        Ok(self.mirror()?.tasks_for_day(date)?)
+    }
+
+    pub fn calendar(&self, start: &str, end: &str) -> SyncResult<Vec<CalendarDay>> {
+        Ok(self.mirror()?.calendar(start, end)?)
+    }
+
+    /// Android 本地设置（独立文件，不参与同步）
+    pub fn local_settings(&self) -> MobileSettings {
+        settings::load(&self.dir)
+    }
+
+    pub fn update_local_settings(&self, next: MobileSettings) -> SyncResult<MobileSettings> {
+        let next = settings::normalize(next);
+        settings::save(&self.dir, &next)
+            .map_err(|e| SyncError::new(SyncErrorKind::Store, e))?;
+        Ok(next)
     }
 
     /// 完成配对：先校验证书指纹，再用一次性配对码换取设备令牌。

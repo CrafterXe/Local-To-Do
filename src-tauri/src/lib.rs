@@ -208,7 +208,7 @@ pub fn run() {
             commands::sync_reset_pairing,
         ]);
 
-    // Android 只注册只读同步命令，不暴露任何任务写接口
+    // Android 只注册只读同步与查询命令，不暴露任何任务写接口
     #[cfg(mobile)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         sync_client::commands::mobile_sync_state,
@@ -216,6 +216,13 @@ pub fn run() {
         sync_client::commands::mobile_pair,
         sync_client::commands::mobile_sync_now,
         sync_client::commands::mobile_unpair,
+        sync_client::commands::mobile_lists,
+        sync_client::commands::mobile_tasks,
+        sync_client::commands::mobile_task,
+        sync_client::commands::mobile_tasks_for_day,
+        sync_client::commands::mobile_calendar,
+        sync_client::commands::mobile_settings_get,
+        sync_client::commands::mobile_settings_update,
     ]);
 
     builder
