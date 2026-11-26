@@ -392,7 +392,7 @@ impl MobileSyncService {
         let token = self
             .secrets
             .load_token()
-            .map_err(|e| SyncError::new(SyncErrorKind::Store, e))?
+            .map_err(|e| SyncError::new(SyncErrorKind::NeedsPairing, e))?
             .filter(|t| !t.is_empty())
             .ok_or_else(|| {
                 SyncError::new(SyncErrorKind::NeedsPairing, "设备令牌已丢失，请重新扫码配对")

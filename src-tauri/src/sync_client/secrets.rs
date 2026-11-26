@@ -151,10 +151,20 @@ mod android {
             env.push_local_frame(16).map_err(js)?;
             let context = unsafe { JObject::from_raw(ctx.context() as jobject) };
             let result = f(env, &context);
+            // 挂起的 Java 异常必须在这里清除：JNI 线程带着未捕获异常退出会直接
+            // 终止进程（例如 GCM IV 长度非法、密文校验失败时）。
+            let pending = env.exception_check().unwrap_or(false);
+            if pending {
+                let _ = env.exception_clear();
+            }
             unsafe {
                 let _ = env.pop_local_frame(&JObject::null());
             }
-            result
+            match (result, pending) {
+                (Ok(value), false) => Ok(value),
+                (Err(message), false) => Err(message),
+                _ => Err("本地安全存储异常，请重新扫码配对".to_string()),
+            }
         }
 
         fn preferences<'a>(
@@ -380,10 +390,16 @@ mod android {
                 .ok_or_else(|| "本地令牌数据格式无效".to_string())?;
             let iv = hex::decode(iv_hex).map_err(|_| "本地令牌数据损坏".to_string())?;
             let data = hex::decode(data_hex).map_err(|_| "本地令牌数据损坏".to_string())?;
+            // Android Keystore 的 GCM 只接受 12 字节 IV；长度不符时必须在调用
+            // JNI 之前拒绝，否则会抛出未捕获异常导致崩溃。
+            if iv.len() != 12 || data.len() < 16 {
+                return Err("本地令牌数据损坏，请重新扫码配对".to_string());
+            }
             with_env(|env, _context| {
                 let key = secret_key(env)?;
                 decrypt(&key, &iv, &data).map(Some)
             })
+            .map_err(|_| "本地令牌无法解密，请重新扫码配对".to_string())
         }
 
         pub fn save(token: &str) -> Result<(), String> {
