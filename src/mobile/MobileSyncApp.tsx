@@ -1,11 +1,39 @@
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  checkPermissions,
-  requestPermissions,
-  scan,
-} from "@tauri-apps/plugin-barcode-scanner";
 
-import { api, type MobilePairingPreview, type MobileSyncState } from "../api";
+import { api, type MobileSyncState } from "../api";
+import {
+  IconAll,
+  IconCalendar,
+  IconList,
+  IconSettings,
+  IconSun,
+} from "../components/Icons";
+import { MobileAllTasks } from "./MobileAllTasks";
+import { MobileCalendar } from "./MobileCalendar";
+import { MobileLists } from "./MobileLists";
+import { MobileSettingsSheet } from "./MobileSettingsSheet";
+import { MobileSyncSheet } from "./MobileSyncSheet";
+import { MobileTaskDetail } from "./MobileTaskDetail";
+import { MobileToday } from "./MobileToday";
+import { PairingPanel } from "./PairingPanel";
+import { errorText } from "./mobileUtils";
+
+type MobileTab = "today" | "all" | "calendar" | "lists";
+
+const TABS: { id: MobileTab; label: string; icon: ReactNode }[] = [
+  { id: "today", label: "我的今天", icon: <IconSun size={21} /> },
+  { id: "all", label: "全部任务", icon: <IconAll size={21} /> },
+  { id: "calendar", label: "日历", icon: <IconCalendar size={21} /> },
+  { id: "lists", label: "我的清单", icon: <IconList size={21} /> },
+];
+
+const TAB_TITLE: Record<MobileTab, string> = {
+  today: "我的今天",
+  all: "全部任务",
+  calendar: "日历",
+  lists: "我的清单",
+};
 
 const PHASE_LABEL: Record<string, string> = {
   unpaired: "未配对",
@@ -19,333 +47,187 @@ const PHASE_LABEL: Record<string, string> = {
   needsPairing: "需要重新配对",
 };
 
-function defaultDeviceName(): string {
-  const match = navigator.userAgent.match(/Android\s([\d.]+)/i);
-  return match ? `Android ${match[1]} 手机` : "Android 手机";
-}
-
-function formatTime(ms: number | null): string {
-  if (!ms) return "尚未同步";
-  return new Date(ms).toLocaleString("zh-CN", { hour12: false });
-}
-
-function shortFingerprint(fingerprint: string): string {
-  if (fingerprint.length <= 23) return fingerprint;
-  return `${fingerprint.slice(0, 11)}…${fingerprint.slice(-8)}`;
-}
-
 /**
- * Android 只读同步界面：仅用于配对、查看同步状态与手动同步。
- * 不提供任何任务新建/编辑/完成/删除入口。
+ * Android 只读伴侣的根组件。
+ *
+ * 数据全部来自 Windows 单向同步的本地镜像，界面不提供任何任务/清单写操作：
+ * 只允许查看、搜索、筛选、排序与查看同步状态。
  */
 export function MobileSyncApp() {
   const [state, setState] = useState<MobileSyncState | null>(null);
-  const [busy, setBusy] = useState<null | "scan" | "pair" | "sync" | "unpair">(null);
+  const [tab, setTab] = useState<MobileTab>("today");
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<"sync" | "settings" | null>(null);
+  const [forcePairing, setForcePairing] = useState(false);
+  const [version, setVersion] = useState(0);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ payload: string; info: MobilePairingPreview } | null>(
-    null,
-  );
-  const [manual, setManual] = useState("");
-  const [showManual, setShowManual] = useState(false);
-  const [deviceName, setDeviceName] = useState(defaultDeviceName);
-  const [confirmUnpair, setConfirmUnpair] = useState(false);
   const autoSynced = useRef(false);
+
+  // 移动端不经过桌面设置页，这里直接使用深色主题变量
+  useEffect(() => {
+    document.documentElement.dataset.theme = "dark";
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       setState(await api.mobileSyncState());
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
     }
   }, []);
-
-  const runSync = useCallback(async () => {
-    setBusy("sync");
-    setError(null);
-    setNotice(null);
-    try {
-      const next = await api.mobileSyncNow();
-      setState(next);
-      if (next.phase === "synced") setNotice("同步完成");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-      void refresh();
-    }
-  }, [refresh]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // 应用启动（或刚配对完成）时自动同步一次
+  // 提示信息几秒后自动消失，避免长期占用页面顶部
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const syncNow = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const next = await api.mobileSyncNow();
+      setState(next);
+      setVersion((value) => value + 1);
+      if (next.phase === "synced") setNotice("同步完成");
+    } catch (e) {
+      setError(errorText(e));
+      void refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
+
+  // 应用启动（或刚完成配对）时自动同步一次
   useEffect(() => {
     if (!state?.paired || autoSynced.current) return;
     autoSynced.current = true;
-    void runSync();
-  }, [state?.paired, runSync]);
+    void syncNow();
+  }, [state?.paired, syncNow]);
 
-  const inspect = useCallback(async (payload: string) => {
-    try {
-      const info = await api.mobileInspectPairing(payload);
-      setPreview({ payload, info });
-      setError(null);
-    } catch (e) {
-      setPreview(null);
-      setError(String(e));
-    }
-  }, []);
-
-  const startScan = async () => {
+  const unpair = useCallback(async () => {
+    setBusy(true);
     setError(null);
-    setNotice(null);
-    setShowManual(false);
-    setBusy("scan");
-    try {
-      const permission = await checkPermissions();
-      if (permission !== "granted") {
-        const granted = await requestPermissions();
-        if (granted !== "granted") {
-          throw new Error("未授予相机权限，无法扫描二维码");
-        }
-      }
-      const result = await scan({ windowed: false });
-      if (result?.content) {
-        await inspect(result.content);
-      }
-    } catch (e) {
-      const text = String(e);
-      if (!/cancel|取消/i.test(text)) {
-        setError(`扫码失败：${text}`);
-      }
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const confirmPair = async () => {
-    if (!preview) return;
-    setBusy("pair");
-    setError(null);
-    setNotice(null);
-    try {
-      const next = await api.mobilePair(preview.payload, deviceName);
-      setState(next);
-      setPreview(null);
-      setManual("");
-      setNotice("配对成功，正在获取数据…");
-      autoSynced.current = false;
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const doUnpair = async () => {
-    setBusy("unpair");
-    setError(null);
-    setNotice(null);
     try {
       const next = await api.mobileUnpair();
       setState(next);
-      setConfirmUnpair(false);
-      autoSynced.current = false;
-      setNotice("已解除配对，本地数据将保留供离线查看");
+      setVersion((value) => value + 1);
+      setSheet(null);
+      setNotice("已解除配对，本地数据仍可离线查看");
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
-  };
+  }, []);
 
-  const syncing = busy === "sync" || state?.phase === "firstSync" || state?.phase === "syncing";
-  const phase = state?.phase ?? "unpaired";
+  if (!state) {
+    return (
+      <div className="mobile-page">
+        <p className="mobile-hint">正在载入…</p>
+      </div>
+    );
+  }
+
+  const hasData =
+    state.counts.tasks > 0 || state.counts.lists > 0 || state.lastSyncAt !== null;
+
+  if (!state.paired && (!hasData || forcePairing)) {
+    return (
+      <PairingPanel
+        state={state}
+        onPaired={(next) => {
+          setState(next);
+          setForcePairing(false);
+          // 配对完成后立即同步一次，避免启动副作用重复触发
+          autoSynced.current = true;
+          void syncNow();
+        }}
+        onBack={hasData ? () => setForcePairing(false) : undefined}
+      />
+    );
+  }
+
+  const phase = state.phase;
+  const phaseLabel = PHASE_LABEL[phase] ?? phase;
 
   return (
-    <div className="mobile-page">
-      <header className="mobile-header">
-        <h1>Local To Do</h1>
-        <p className="mobile-subtitle">手机只读同步 · 数据由 Windows 电脑提供</p>
+    <div className="mobile-shell">
+      <header className="mobile-topbar">
+        <div className="mobile-topbar-text">
+          <h1>{TAB_TITLE[tab]}</h1>
+          <p>{state.paired ? "由 Windows 电脑单向同步" : "未连接电脑 · 离线浏览"}</p>
+        </div>
+        <div className="mobile-topbar-actions">
+          <button
+            className={`mobile-phase-chip phase-${phase}`}
+            onClick={() => setSheet("sync")}
+          >
+            <span className="mobile-phase-dot" />
+            {phaseLabel}
+          </button>
+          <button
+            className="mobile-icon-button"
+            onClick={() => setSheet("settings")}
+            aria-label="设置"
+          >
+            <IconSettings size={20} />
+          </button>
+        </div>
       </header>
 
-      {error && <div className="mobile-alert error">{error}</div>}
-      {!error && state?.error && <div className="mobile-alert error">{state.error}</div>}
+      {(error || state.error) && (
+        <div className="mobile-alert error">{error ?? state.error}</div>
+      )}
       {notice && <div className="mobile-alert">{notice}</div>}
 
-      {!state?.paired && (
-        <section className="mobile-card">
-          <h2>连接电脑</h2>
-          <p className="mobile-hint">
-            在 Windows 的「设置 → 局域网同步」中开启服务并生成配对二维码，然后用手机扫描。
-          </p>
-          <button
-            className="mobile-button primary"
-            onClick={() => void startScan()}
-            disabled={busy !== null}
-          >
-            {busy === "scan" ? "正在打开相机…" : "扫描配对二维码"}
-          </button>
-          <button
-            className="mobile-button"
-            onClick={() => setShowManual((value) => !value)}
-            disabled={busy !== null}
-          >
-            {showManual ? "收起手动输入" : "手动粘贴配对信息"}
-          </button>
+      <main className="mobile-content">
+        {tab === "today" && <MobileToday version={version} onOpenTask={setDetailId} />}
+        {tab === "all" && <MobileAllTasks version={version} onOpenTask={setDetailId} />}
+        {tab === "calendar" && <MobileCalendar version={version} onOpenTask={setDetailId} />}
+        {tab === "lists" && <MobileLists version={version} onOpenTask={setDetailId} />}
+      </main>
 
-          {showManual && (
-            <div className="mobile-manual">
-              <textarea
-                className="mobile-textarea"
-                placeholder="粘贴电脑上显示的配对信息（含地址、端口、证书指纹和配对码）"
-                value={manual}
-                onChange={(event) => setManual(event.target.value)}
-                rows={4}
-              />
-              <button
-                className="mobile-button"
-                onClick={() => void inspect(manual.trim())}
-                disabled={!manual.trim() || busy !== null}
-              >
-                校验配对信息
-              </button>
-            </div>
-          )}
+      <nav className="mobile-tabbar">
+        {TABS.map((item) => (
+          <button
+            key={item.id}
+            className={`mobile-tab${tab === item.id ? " active" : ""}`}
+            onClick={() => setTab(item.id)}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
 
-          {preview && (
-            <div className="mobile-preview">
-              <h3>确认服务器</h3>
-              <dl className="mobile-kv">
-                <dt>地址</dt>
-                <dd>
-                  {preview.info.host}:{preview.info.port}
-                </dd>
-                <dt>证书指纹</dt>
-                <dd className="mobile-mono">{preview.info.fingerprint}</dd>
-                <dt>协议版本</dt>
-                <dd>{preview.info.protocolVersion}</dd>
-              </dl>
-              {preview.info.expired && (
-                <p className="mobile-warning">二维码已过期，请在电脑上重新生成。</p>
-              )}
-              <label className="mobile-label" htmlFor="mobile-device-name">
-                设备名称
-              </label>
-              <input
-                id="mobile-device-name"
-                className="mobile-input"
-                value={deviceName}
-                maxLength={64}
-                onChange={(event) => setDeviceName(event.target.value)}
-              />
-              <div className="mobile-actions">
-                <button
-                  className="mobile-button primary"
-                  onClick={() => void confirmPair()}
-                  disabled={preview.info.expired || busy !== null}
-                >
-                  {busy === "pair" ? "配对中…" : "确认配对"}
-                </button>
-                <button
-                  className="mobile-button"
-                  onClick={() => setPreview(null)}
-                  disabled={busy !== null}
-                >
-                  取消
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
+      {detailId && (
+        <MobileTaskDetail taskId={detailId} onClose={() => setDetailId(null)} />
       )}
 
-      {state?.paired && (
-        <>
-          <section className="mobile-card">
-            <div className="mobile-status-row">
-              <h2>同步状态</h2>
-              <span className={`mobile-badge phase-${phase}`}>{PHASE_LABEL[phase] ?? phase}</span>
-            </div>
-            {syncing && (
-              <div className="mobile-progress">
-                <span />
-              </div>
-            )}
-            <dl className="mobile-kv">
-              <dt>上次同步</dt>
-              <dd>{formatTime(state.lastSyncAt)}</dd>
-              <dt>数据量</dt>
-              <dd>
-                {state.counts.tasks} 个任务 · {state.counts.lists} 个清单
-              </dd>
-              <dt>已应用版本</dt>
-              <dd>rev {state.lastRev}</dd>
-            </dl>
-            {state.needsSnapshot && (
-              <p className="mobile-warning">本地镜像已清空，需要重新获取完整快照。</p>
-            )}
-            <button
-              className="mobile-button primary"
-              onClick={() => void runSync()}
-              disabled={busy !== null}
-            >
-              {syncing ? "同步中…" : "立即同步"}
-            </button>
-          </section>
-
-          <section className="mobile-card">
-            <h2>已连接的电脑</h2>
-            <dl className="mobile-kv">
-              <dt>地址</dt>
-              <dd>
-                {state.connection?.host}:{state.connection?.port}
-              </dd>
-              <dt>设备</dt>
-              <dd>{state.connection?.deviceName}</dd>
-              <dt>证书指纹</dt>
-              <dd className="mobile-mono">
-                {shortFingerprint(state.connection?.fingerprint ?? "")}
-              </dd>
-              <dt>配对时间</dt>
-              <dd>{formatTime(state.connection?.pairedAt ?? null)}</dd>
-            </dl>
-            {confirmUnpair ? (
-              <div className="mobile-actions">
-                <button
-                  className="mobile-button danger"
-                  onClick={() => void doUnpair()}
-                  disabled={busy !== null}
-                >
-                  {busy === "unpair" ? "解除中…" : "确认解除配对"}
-                </button>
-                <button
-                  className="mobile-button"
-                  onClick={() => setConfirmUnpair(false)}
-                  disabled={busy !== null}
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
-              <button
-                className="mobile-button"
-                onClick={() => setConfirmUnpair(true)}
-                disabled={busy !== null}
-              >
-                解除配对
-              </button>
-            )}
-            <p className="mobile-hint">
-              解除配对只会删除设备令牌与连接信息，最近一次同步的数据仍保留在本机。
-            </p>
-          </section>
-        </>
+      {sheet === "sync" && (
+        <MobileSyncSheet
+          state={state}
+          busy={busy}
+          onClose={() => setSheet(null)}
+          onSync={() => void syncNow()}
+          onUnpair={() => void unpair()}
+          onRepair={() => {
+            setSheet(null);
+            setForcePairing(true);
+          }}
+        />
       )}
 
-      <footer className="mobile-footer">Android 端为只读伴侣，任务修改请回到 Windows 电脑。</footer>
+      {sheet === "settings" && <MobileSettingsSheet onClose={() => setSheet(null)} />}
     </div>
   );
 }

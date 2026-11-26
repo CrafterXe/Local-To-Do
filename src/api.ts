@@ -275,6 +275,20 @@ export interface MobilePairingPreview {
   expired: boolean;
 }
 
+/** Android 只读查询条件（仅影响展示结果） */
+export interface MobileTaskQuery {
+  scope?: "all" | "today" | "completed" | "list";
+  listId?: string | null;
+  search?: string | null;
+  includeCompleted?: boolean | null;
+}
+
+/** Android 本地设置，不参与 Windows 同步 */
+export interface MobileSettings {
+  notificationsEnabled: boolean;
+  reminderLeadMinutes: number;
+}
+
 export const api = {
   listLists: () => invoke<TaskList[]>("list_lists"),
   createList: (name: string, color: string, icon = "") =>
@@ -368,4 +382,14 @@ export const api = {
     invoke<MobileSyncState>("mobile_pair", { payload, deviceName }),
   mobileSyncNow: () => invoke<MobileSyncState>("mobile_sync_now"),
   mobileUnpair: () => invoke<MobileSyncState>("mobile_unpair"),
+
+  mobileLists: () => invoke<TaskList[]>("mobile_lists"),
+  mobileTasks: (query: MobileTaskQuery) => invoke<Task[]>("mobile_tasks", { query }),
+  mobileTask: (id: string) => invoke<Task>("mobile_task", { id }),
+  mobileTasksForDay: (date: string) => invoke<Task[]>("mobile_tasks_for_day", { date }),
+  mobileCalendar: (start: string, end: string) =>
+    invoke<CalendarDay[]>("mobile_calendar", { start, end }),
+  mobileSettingsGet: () => invoke<MobileSettings>("mobile_settings_get"),
+  mobileSettingsUpdate: (settings: MobileSettings) =>
+    invoke<MobileSettings>("mobile_settings_update", { settings }),
 };
