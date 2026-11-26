@@ -5,9 +5,11 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::error::AppResult;
+use ltd_core::error::AppResult;
+use ltd_core::{db, domain, repo};
+
 use crate::state::AppState;
-use crate::{backup, db, domain, logging, repo};
+use crate::{backup, logging};
 
 /// 超过该时长未触发的提醒视为「错过」，不再弹出打扰性通知
 const MISSED_GRACE_MS: i64 = 24 * 3600 * 1000;

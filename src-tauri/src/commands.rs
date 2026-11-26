@@ -3,14 +3,14 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::backup::{self, RestoreReport};
-use crate::db::{self, DbStats};
-use crate::error::{err, AppResult};
-use crate::models::{
+use crate::state::AppState;
+use ltd_core::db::{self, DbStats};
+use ltd_core::error::{err, AppResult};
+use ltd_core::models::{
     AppInfo, AppSettings, BackupEntry, DeletedList, HistoryEntry, Note, Task, TaskList, TaskQuery,
 };
-use crate::repo;
-use crate::repo::tasks::{SidebarCounts, TaskInput};
-use crate::state::AppState;
+use ltd_core::repo;
+use ltd_core::repo::tasks::{SidebarCounts, TaskInput};
 
 // ---------------- 清单 ----------------
 
@@ -103,7 +103,7 @@ pub fn calendar_month(
     state: State<'_, Arc<AppState>>,
     start: String,
     end: String,
-) -> AppResult<Vec<crate::models::CalendarDay>> {
+) -> AppResult<Vec<ltd_core::models::CalendarDay>> {
     let conn = state.db.lock();
     repo::calendar_month(&conn, &start, &end)
 }
@@ -327,7 +327,7 @@ pub fn update_settings(
     {
         let conn = state.db.lock();
         db::save_settings(&conn, &s)?;
-        crate::domain::set_timezone(if s.timezone_auto {
+        ltd_core::domain::set_timezone(if s.timezone_auto {
             None
         } else {
             s.timezone.clone()
@@ -360,7 +360,7 @@ pub fn reset_settings(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppRes
 pub fn resync_reminders(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     let conn = state.db.lock();
     let s = db::load_settings(&conn)?;
-    crate::domain::set_timezone(if s.timezone_auto {
+    ltd_core::domain::set_timezone(if s.timezone_auto {
         None
     } else {
         s.timezone.clone()
@@ -371,6 +371,7 @@ pub fn resync_reminders(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(desktop)]
 fn apply_autostart(app: &AppHandle, enabled: bool) {
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
@@ -386,6 +387,9 @@ fn apply_autostart(app: &AppHandle, enabled: bool) {
     }
 }
 
+#[cfg(not(desktop))]
+fn apply_autostart(_app: &AppHandle, _enabled: bool) {}
+
 #[tauri::command]
 pub fn get_app_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppResult<AppInfo> {
     Ok(AppInfo {
@@ -394,8 +398,8 @@ pub fn get_app_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppResul
         db_path: state.db.path.to_string_lossy().to_string(),
         backup_dir: state.backup_dir.to_string_lossy().to_string(),
         log_dir: state.log_dir.to_string_lossy().to_string(),
-        today: crate::domain::today_string(),
-        now: crate::domain::local_now_ms(),
+        today: ltd_core::domain::today_string(),
+        now: ltd_core::domain::local_now_ms(),
     })
 }
 
@@ -417,7 +421,7 @@ pub fn send_test_notification(app: AppHandle) -> AppResult<bool> {
 
 #[tauri::command]
 pub fn preview_sound(path: Option<String>) -> AppResult<()> {
-    crate::sound::play(path.as_deref()).map_err(crate::error::AppError::Other)
+    crate::sound::play(path.as_deref()).map_err(ltd_core::error::AppError::Other)
 }
 
 /// 检查提示音文件是否可用（None 表示系统默认提示音，始终可用）
@@ -488,7 +492,7 @@ pub fn validate_backup(path: String) -> AppResult<RestoreReport> {
     }
     let data = bundle
         .get("data")
-        .ok_or_else(|| crate::error::AppError::Other("备份文件缺少数据".into()))?;
+        .ok_or_else(|| ltd_core::error::AppError::Other("备份文件缺少数据".into()))?;
     let count = |name: &str| {
         data.get(name)
             .and_then(|v| v.as_array())
@@ -508,7 +512,7 @@ pub fn open_data_dir(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppResu
     use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_path(state.data_dir.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))
+        .map_err(|e| ltd_core::error::AppError::Other(e.to_string()))
 }
 
 #[tauri::command]
@@ -516,5 +520,64 @@ pub fn open_backup_dir(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppRe
     use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_path(state.backup_dir.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))
+        .map_err(|e| ltd_core::error::AppError::Other(e.to_string()))
+}
+
+// ---------------- 局域网同步（Windows 服务端） ----------------
+
+#[tauri::command]
+pub fn sync_server_status(state: State<'_, Arc<AppState>>) -> crate::sync_server::SyncStatus {
+    state.sync.status()
+}
+
+/// 开启同步服务：自动选择家庭局域网地址并监听默认端口
+#[tauri::command]
+pub fn sync_server_start(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::SyncStatus> {
+    state.sync.start()
+}
+
+#[tauri::command]
+pub fn sync_server_stop(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::SyncStatus> {
+    state.sync.stop()
+}
+
+/// 生成一次性配对码与二维码（需服务已开启）
+#[tauri::command]
+pub fn sync_create_pairing(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::PairingInfo> {
+    state.sync.create_pairing()
+}
+
+#[tauri::command]
+pub fn sync_cancel_pairing(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    state.sync.cancel_pairing();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn sync_list_devices(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Vec<crate::sync_server::DeviceView>> {
+    state.sync.list_devices()
+}
+
+#[tauri::command]
+pub fn sync_revoke_device(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> AppResult<Vec<crate::sync_server::DeviceView>> {
+    state.sync.revoke_device(&id)
+}
+
+/// 重置配对：清除已授权设备并更换证书，需要手机重新扫码配对
+#[tauri::command]
+pub fn sync_reset_pairing(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::sync_server::SyncStatus> {
+    state.sync.reset_pairing()
 }

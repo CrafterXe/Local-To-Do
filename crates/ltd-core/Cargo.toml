@@ -1,0 +1,20 @@
+[package]
+name = "ltd-core"
+version = "1.2.1"
+description = "Local To Do 平台无关核心：数据模型、SQLite 访问、重复规则与提醒计算"
+authors = ["Local To Do"]
+edition = "2021"
+rust-version = "1.77"
+
+[features]
+# 供上层 crate 的测试使用内存数据库
+test-utils = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.43", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = { version = "0.10.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+csv = "1"

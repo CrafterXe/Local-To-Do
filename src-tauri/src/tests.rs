@@ -2,11 +2,12 @@
 
 use rusqlite::Connection;
 
-use crate::db::Db;
-use crate::domain;
-use crate::models::TaskQuery;
-use crate::repo;
-use crate::repo::tasks::{RecurrenceInput, TaskInput};
+use ltd_core::db::Db;
+use ltd_core::domain;
+use ltd_core::models::TaskQuery;
+use ltd_core::repo;
+use ltd_core::repo::tasks::{RecurrenceInput, TaskInput};
+use ltd_core::sync;
 
 fn setup() -> Db {
     Db::open_memory().expect("内存数据库初始化失败")
@@ -595,14 +596,14 @@ fn backup_export_and_restore_roundtrip() {
 fn settings_roundtrip() {
     let db = setup();
     let conn = db.lock();
-    let mut settings = crate::db::load_settings(&conn).unwrap();
+    let mut settings = ltd_core::db::load_settings(&conn).unwrap();
     assert_eq!(settings.theme, "dark");
     settings.theme = "light".into();
     settings.notifications_enabled = false;
     settings.auto_backup_interval_hours = 6;
-    crate::db::save_settings(&conn, &settings).unwrap();
+    ltd_core::db::save_settings(&conn, &settings).unwrap();
 
-    let loaded = crate::db::load_settings(&conn).unwrap();
+    let loaded = ltd_core::db::load_settings(&conn).unwrap();
     assert_eq!(loaded.theme, "light");
     assert!(!loaded.notifications_enabled);
     assert_eq!(loaded.auto_backup_interval_hours, 6);
@@ -662,7 +663,7 @@ fn migration_from_v1_adds_list_deleted_at() {
     let db = Db::open(&path).unwrap();
     let conn = db.lock();
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let has_col: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('lists') WHERE name='deleted_at'",
@@ -833,15 +834,15 @@ fn custom_reminder_offset_recomputes_after_due_change() {
 fn sound_settings_roundtrip() {
     let db = setup();
     let conn = db.lock();
-    let mut settings = crate::db::load_settings(&conn).unwrap();
+    let mut settings = ltd_core::db::load_settings(&conn).unwrap();
     assert!(settings.sound_enabled);
     assert!(settings.sound_path.is_none());
 
     settings.sound_enabled = false;
     settings.sound_path = Some("C:\\sounds\\ding.wav".into());
-    crate::db::save_settings(&conn, &settings).unwrap();
+    ltd_core::db::save_settings(&conn, &settings).unwrap();
 
-    let loaded = crate::db::load_settings(&conn).unwrap();
+    let loaded = ltd_core::db::load_settings(&conn).unwrap();
     assert!(!loaded.sound_enabled);
     assert_eq!(loaded.sound_path.as_deref(), Some("C:\\sounds\\ding.wav"));
 }
@@ -1099,19 +1100,460 @@ fn reset_settings_keeps_tasks_and_lists() {
     )
     .unwrap();
 
-    let mut s = crate::db::load_settings(&conn).unwrap();
+    let mut s = ltd_core::db::load_settings(&conn).unwrap();
     s.theme = "light".into();
     s.sound_path = Some("C:\\ding.wav".into());
     s.timezone_auto = false;
     s.timezone = Some("Asia/Tokyo".into());
-    crate::db::save_settings(&conn, &s).unwrap();
+    ltd_core::db::save_settings(&conn, &s).unwrap();
 
-    let reset = crate::db::reset_settings(&conn).unwrap();
-    assert_eq!(reset.theme, crate::models::AppSettings::default().theme);
+    let reset = ltd_core::db::reset_settings(&conn).unwrap();
+    assert_eq!(reset.theme, ltd_core::models::AppSettings::default().theme);
     assert!(reset.timezone_auto);
     assert!(reset.timezone.is_none());
 
     // 用户数据不受影响
     assert_eq!(repo::all_lists(&conn).unwrap().len(), 2);
     assert_eq!(repo::get_task(&conn, &task.id).unwrap().title, "保留任务");
+}
+
+// ---------------- 单向同步（v5） ----------------
+
+fn last_log(conn: &Connection) -> (String, String, String, Option<String>) {
+    conn.query_row(
+        "SELECT entity, entity_id, op, payload FROM sync_log ORDER BY rev DESC LIMIT 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )
+    .unwrap()
+}
+
+fn log_count(conn: &Connection) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM sync_log", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn count_logs(conn: &Connection, entity: &str, entity_id: &str, op: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sync_log WHERE entity=?1 AND entity_id=?2 AND op=?3",
+        [entity, entity_id, op],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn payload_of(log: &(String, String, String, Option<String>)) -> serde_json::Value {
+    serde_json::from_str(log.3.as_ref().expect("upsert 应携带 payload")).unwrap()
+}
+
+fn temp_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("local_todo_{tag}_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn sync_task_lifecycle_events() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(&conn, &make_input(&conn, "同步任务")).unwrap();
+
+    let log = last_log(&conn);
+    assert_eq!((log.0.as_str(), log.1.as_str(), log.2.as_str()), ("task", task.id.as_str(), "upsert"));
+    let payload = payload_of(&log);
+    assert_eq!(payload["title"], "同步任务");
+    assert_eq!(payload["isCompleted"], false);
+
+    repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            title: "改名任务".into(),
+            ..make_input(&conn, "x")
+        },
+    )
+    .unwrap();
+    let log = last_log(&conn);
+    assert_eq!(log.2, "upsert");
+    assert_eq!(payload_of(&log)["title"], "改名任务");
+
+    repo::complete_task(&conn, &task.id, true).unwrap();
+    let log = last_log(&conn);
+    assert_eq!(log.2, "upsert");
+    assert_eq!(payload_of(&log)["isCompleted"], true);
+
+    repo::complete_task(&conn, &task.id, false).unwrap();
+    let log = last_log(&conn);
+    assert_eq!(payload_of(&log)["isCompleted"], false);
+
+    repo::delete_task(&conn, &task.id, "single").unwrap();
+    let log = last_log(&conn);
+    assert_eq!((log.0.as_str(), log.1.as_str(), log.2.as_str()), ("task", task.id.as_str(), "delete"));
+    assert!(log.3.is_none());
+
+    repo::restore_task(&conn, &task.id).unwrap();
+    let log = last_log(&conn);
+    assert_eq!(log.2, "upsert");
+    assert!(payload_of(&log)["deletedAt"].is_null());
+}
+
+#[test]
+fn sync_recurrence_lifecycle_events() {
+    let db = setup();
+    let conn = db.lock();
+    let recurrence = Some(RecurrenceInput {
+        kind: "daily".into(),
+        interval: 1,
+        weekdays: String::new(),
+        month_day: None,
+    });
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-01".into()),
+            recurrence: recurrence.clone(),
+            ..make_input(&conn, "每日任务")
+        },
+    )
+    .unwrap();
+    let rec_id = task.recurrence_id.clone().unwrap();
+    assert_eq!(count_logs(&conn, "recurrence", &rec_id, "upsert"), 1);
+
+    // 修改规则基准日期：规则内容变化产生新的 upsert
+    repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-03".into()),
+            recurrence: recurrence.clone(),
+            ..make_input(&conn, "每日任务")
+        },
+    )
+    .unwrap();
+    assert_eq!(count_logs(&conn, "recurrence", &rec_id, "upsert"), 2);
+
+    // 取消重复：规则不再被引用，发送删除事件
+    repo::update_task(
+        &conn,
+        &task.id,
+        &TaskInput {
+            due_date: Some("2026-12-03".into()),
+            recurrence: None,
+            ..make_input(&conn, "每日任务")
+        },
+    )
+    .unwrap();
+    assert_eq!(count_logs(&conn, "recurrence", &rec_id, "delete"), 1);
+}
+
+#[test]
+fn sync_step_events() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(&conn, &make_input(&conn, "带步骤任务")).unwrap();
+    let task = repo::add_step(&conn, &task.id, "第一步").unwrap();
+    let step_id = task.steps[0].id.clone();
+    assert_eq!(count_logs(&conn, "step", &step_id, "upsert"), 1);
+    // 步骤变化同时刷新任务的 updated_at，需要同步任务行
+    assert_eq!(last_log(&conn).0, "task");
+
+    repo::update_step(&conn, &step_id, "改名步骤", true).unwrap();
+    let updates: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sync_log WHERE entity='step' AND entity_id=?1 AND op='upsert'",
+            [&step_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(updates, 2);
+
+    repo::delete_step(&conn, &step_id).unwrap();
+    assert_eq!(count_logs(&conn, "step", &step_id, "delete"), 1);
+    assert_eq!(last_log(&conn).0, "task");
+}
+
+#[test]
+fn sync_list_events_and_move_mode() {
+    let db = setup();
+    let conn = db.lock();
+    let list = repo::create_list(&conn, "工作", "#123456", "").unwrap();
+    assert_eq!(count_logs(&conn, "list", &list.id, "upsert"), 1);
+
+    repo::update_list(&conn, &list.id, "工作二", "#654321", "").unwrap();
+    let log = last_log(&conn);
+    assert_eq!((log.0.as_str(), log.2.as_str()), ("list", "upsert"));
+    assert_eq!(payload_of(&log)["name"], "工作二");
+
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            list_id: Some(list.id.clone()),
+            ..make_input(&conn, "清单任务")
+        },
+    )
+    .unwrap();
+    let default_id = repo::all_lists(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|l| l.id != list.id)
+        .unwrap()
+        .id;
+    repo::delete_list(&conn, &list.id, "move", Some(&default_id)).unwrap();
+    assert_eq!(count_logs(&conn, "list", &list.id, "delete"), 1);
+    // 任务被移动到其他清单，同步 upsert 最新归属
+    let moved: Option<String> = conn
+        .query_row(
+            "SELECT payload FROM sync_log WHERE entity='task' AND entity_id=?1 ORDER BY rev DESC LIMIT 1",
+            [&task.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let moved: serde_json::Value = serde_json::from_str(&moved.unwrap()).unwrap();
+    assert_eq!(moved["listId"], default_id);
+}
+
+#[test]
+fn sync_list_delete_restore_purge_events() {
+    let db = setup();
+    let conn = db.lock();
+    let list = repo::create_list(&conn, "项目", "#ff6600", "").unwrap();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            list_id: Some(list.id.clone()),
+            ..make_input(&conn, "项目任务")
+        },
+    )
+    .unwrap();
+    repo::add_step(&conn, &task.id, "子步骤").unwrap();
+    let step_id = repo::get_task(&conn, &task.id).unwrap().steps[0].id.clone();
+
+    // 连同任务删除
+    repo::delete_list(&conn, &list.id, "delete", None).unwrap();
+    assert_eq!(count_logs(&conn, "task", &task.id, "delete"), 1);
+    assert_eq!(count_logs(&conn, "step", &step_id, "delete"), 1);
+    assert_eq!(count_logs(&conn, "list", &list.id, "delete"), 1);
+
+    // 恢复清单：清单、任务、步骤重新下发（含重复规则场景时的规则行）
+    repo::restore_list(&conn, &list.id).unwrap();
+    assert_eq!(count_logs(&conn, "list", &list.id, "upsert"), 2);
+    assert_eq!(count_logs(&conn, "task", &task.id, "upsert"), 3);
+    assert_eq!(count_logs(&conn, "step", &step_id, "upsert"), 2);
+
+    // 永久删除
+    repo::delete_list(&conn, &list.id, "delete", None).unwrap();
+    repo::purge_list(&conn, &list.id).unwrap();
+    assert!(count_logs(&conn, "list", &list.id, "delete") >= 2);
+    assert!(count_logs(&conn, "task", &task.id, "delete") >= 2);
+}
+
+#[test]
+fn sync_purge_and_empty_deleted_events() {
+    let db = setup();
+    let conn = db.lock();
+    let t1 = repo::create_task(&conn, &make_input(&conn, "任务一")).unwrap();
+    let t2 = repo::create_task(&conn, &make_input(&conn, "任务二")).unwrap();
+
+    repo::delete_task(&conn, &t1.id, "single").unwrap();
+    repo::purge_task(&conn, &t1.id).unwrap();
+    assert_eq!(count_logs(&conn, "task", &t1.id, "delete"), 2);
+
+    repo::delete_task(&conn, &t2.id, "single").unwrap();
+    repo::empty_deleted(&conn).unwrap();
+    assert_eq!(count_logs(&conn, "task", &t2.id, "delete"), 2);
+    let remaining: i64 = conn
+        .query_row("SELECT COUNT(*) FROM tasks WHERE deleted_at IS NOT NULL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn sync_snapshot_excludes_deleted_and_has_relations() {
+    let db = setup();
+    let conn = db.lock();
+    let alive = repo::create_task(
+        &conn,
+        &TaskInput {
+            recurrence: Some(RecurrenceInput {
+                kind: "weekly".into(),
+                interval: 1,
+                weekdays: "1,3".into(),
+                month_day: None,
+            }),
+            due_date: Some("2026-12-01".into()),
+            ..make_input(&conn, "保留任务")
+        },
+    )
+    .unwrap();
+    repo::add_step(&conn, &alive.id, "步骤").unwrap();
+    let gone = repo::create_task(&conn, &make_input(&conn, "已删除任务")).unwrap();
+    repo::delete_task(&conn, &gone.id, "single").unwrap();
+
+    let snapshot = sync::snapshot(&conn).unwrap();
+    assert_eq!(snapshot.rev, sync::current_rev(&conn).unwrap());
+    assert!(snapshot.tasks.iter().any(|t| t.id == alive.id));
+    assert!(!snapshot.tasks.iter().any(|t| t.id == gone.id));
+    assert!(snapshot.steps.iter().all(|s| s.task_id != gone.id));
+    let rec_id = alive.recurrence_id.clone().unwrap();
+    assert!(snapshot.recurrences.iter().any(|r| r.id == rec_id));
+}
+
+#[test]
+fn sync_snapshot_then_incremental_has_no_gap() {
+    let db = setup();
+    let conn = db.lock();
+    repo::create_task(&conn, &make_input(&conn, "快照前")).unwrap();
+    let snapshot = sync::snapshot(&conn).unwrap();
+    let after = repo::create_task(&conn, &make_input(&conn, "快照后")).unwrap();
+
+    let changes = sync::changes_since(&conn, snapshot.rev, None).unwrap();
+    assert!(changes.changes.iter().any(|c| c.entity_id == after.id));
+    assert!(changes.changes.iter().all(|c| c.rev > snapshot.rev));
+
+    // 断点续传：游标推进后不再重复返回
+    let last_rev = changes.changes.last().unwrap().rev;
+    assert!(sync::changes_since(&conn, last_rev, None).unwrap().changes.is_empty());
+}
+
+#[test]
+fn sync_changes_idempotent_and_paginated() {
+    let db = setup();
+    let conn = db.lock();
+    for i in 0..3 {
+        repo::create_task(&conn, &make_input(&conn, &format!("分页任务 {i}"))).unwrap();
+    }
+    let total = sync::current_rev(&conn).unwrap();
+    assert_eq!(total, log_count(&conn));
+
+    let first = sync::changes_since(&conn, 0, Some(2)).unwrap();
+    assert_eq!(first.changes.len(), 2);
+    assert!(first.has_more);
+    let again = sync::changes_since(&conn, 0, Some(2)).unwrap();
+    let revs = |r: &ltd_core::sync::SyncChanges| r.changes.iter().map(|c| c.rev).collect::<Vec<_>>();
+    assert_eq!(revs(&first), revs(&again));
+
+    let mut since = 0i64;
+    let mut collected: Vec<i64> = Vec::new();
+    loop {
+        let batch = sync::changes_since(&conn, since, Some(2)).unwrap();
+        if batch.changes.is_empty() {
+            break;
+        }
+        collected.extend(batch.changes.iter().map(|c| c.rev));
+        since = batch.changes.last().unwrap().rev;
+        if !batch.has_more {
+            break;
+        }
+    }
+    assert_eq!(collected.len() as i64, total);
+    assert!(collected.windows(2).all(|w| w[0] < w[1]));
+}
+
+#[test]
+fn sync_refresh_reminders_logs_only_when_changed() {
+    let db = setup();
+    let conn = db.lock();
+    let task = repo::create_task(
+        &conn,
+        &TaskInput {
+            due_date: Some("2026-12-01".into()),
+            due_time: Some("09:00".into()),
+            reminder_enabled: Some(true),
+            reminder_offset: Some(5),
+            ..make_input(&conn, "提醒任务")
+        },
+    )
+    .unwrap();
+    let rev = sync::current_rev(&conn).unwrap();
+
+    ltd_core::db::refresh_all_reminders(&conn).unwrap();
+    assert_eq!(sync::current_rev(&conn).unwrap(), rev);
+
+    conn.execute("UPDATE tasks SET reminder_at = 1 WHERE id=?1", [&task.id]).unwrap();
+    ltd_core::db::refresh_all_reminders(&conn).unwrap();
+    let changes = sync::changes_since(&conn, rev, None).unwrap();
+    assert!(changes
+        .changes
+        .iter()
+        .any(|c| c.entity == "task" && c.entity_id == task.id && c.op == "upsert"));
+}
+
+#[test]
+fn sync_migration_v4_to_v5_backs_up_and_keeps_data() {
+    let dir = temp_dir("mig");
+    let path = dir.join("local-to-do.db");
+    {
+        let db = Db::open(&path).unwrap();
+        let conn = db.lock();
+        repo::create_task(&conn, &make_input(&conn, "迁移保留任务")).unwrap();
+        conn.execute("DROP TABLE sync_log", []).unwrap();
+        conn.execute_batch("PRAGMA user_version = 4;").unwrap();
+    }
+
+    let db = Db::open(&path).unwrap();
+    let conn = db.lock();
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+    assert_eq!(version, 5);
+    let has_log: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sync_log'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_log, 1);
+    let tasks = repo::list_tasks(
+        &conn,
+        &TaskQuery {
+            view: "all".into(),
+            list_id: None,
+            search: None,
+            include_completed: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].title, "迁移保留任务");
+    drop(conn);
+    drop(db);
+
+    let backups: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains(".v4-backup-"))
+        .collect();
+    assert_eq!(backups.len(), 1);
+
+    // 备份文件必须是迁移前的 v4 状态，可直接用于回滚
+    let backup_conn = Connection::open(dir.join(&backups[0])).unwrap();
+    let backup_version: i64 = backup_conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(backup_version, 4);
+    let backup_title: String = backup_conn
+        .query_row("SELECT title FROM tasks LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(backup_title, "迁移保留任务");
+    drop(backup_conn);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sync_backup_restore_writes_reset_marker() {
+    let db = setup();
+    let conn = db.lock();
+    repo::create_task(&conn, &make_input(&conn, "备份同步任务")).unwrap();
+    let dir = temp_dir("reset");
+    let json_path = dir.join("backup.json");
+    crate::backup::export_json(&conn, &json_path).unwrap();
+    drop(conn);
+
+    let mut conn2 = db.lock();
+    crate::backup::restore_from_json(&mut conn2, &json_path).unwrap();
+    let log = last_log(&conn2);
+    assert_eq!((log.0.as_str(), log.1.as_str(), log.2.as_str()), ("*", "*", "reset"));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

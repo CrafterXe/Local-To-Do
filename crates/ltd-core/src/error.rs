@@ -6,7 +6,6 @@ pub enum AppError {
     Io(std::io::Error),
     Json(serde_json::Error),
     Csv(csv::Error),
-    Tauri(tauri::Error),
     Other(String),
 }
 
@@ -17,7 +16,6 @@ impl fmt::Display for AppError {
             AppError::Io(e) => write!(f, "文件错误: {e}"),
             AppError::Json(e) => write!(f, "JSON 错误: {e}"),
             AppError::Csv(e) => write!(f, "CSV 错误: {e}"),
-            AppError::Tauri(e) => write!(f, "系统错误: {e}"),
             AppError::Other(s) => write!(f, "{s}"),
         }
     }
@@ -46,12 +44,6 @@ impl From<serde_json::Error> for AppError {
 impl From<csv::Error> for AppError {
     fn from(e: csv::Error) -> Self {
         AppError::Csv(e)
-    }
-}
-
-impl From<tauri::Error> for AppError {
-    fn from(e: tauri::Error) -> Self {
-        AppError::Tauri(e)
     }
 }
 

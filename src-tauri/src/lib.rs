@@ -1,29 +1,38 @@
 mod backup;
 mod commands;
-mod db;
-mod domain;
-mod error;
 mod logging;
-mod models;
-mod repo;
 mod scheduler;
 mod sound;
 mod state;
+mod sync_client;
+mod sync_server;
 
 #[cfg(test)]
 mod tests;
 
 use std::sync::Arc;
 
+use ltd_core::db;
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+#[cfg(desktop)]
+use tauri::{AppHandle, Emitter};
+use tauri::Manager;
+#[cfg(desktop)]
+use tauri::WindowEvent;
+#[cfg(desktop)]
 use tauri_plugin_window_state::StateFlags;
 
 use state::AppState;
 
+// 移动端入口：生成 Android JNI 导出并调用 run()。桌面端此标注不生效。
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
@@ -32,15 +41,28 @@ pub fn run() {
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--autostart"]),
-        ))
+        ));
+
+    let builder = builder
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+
+    // 扫码插件仅在移动端可用，桌面端不注册
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+
+    let builder = builder
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            // 仅用于隔离测试：设置 LTD_DATA_DIR 时改用该目录，避免触碰真实用户数据。
+            // 未设置时行为与之前完全一致。
+            let data_dir = match std::env::var("LTD_DATA_DIR") {
+                Ok(dir) if !dir.trim().is_empty() => std::path::PathBuf::from(dir),
+                _ => app.path().app_data_dir()?,
+            };
             std::fs::create_dir_all(&data_dir)?;
             let log_dir = data_dir.join("logs");
             let _ = logging::init(&log_dir);
@@ -52,16 +74,20 @@ pub fn run() {
 
             // 同步开机自启的真实状态（用户可能在系统设置里改过）
             {
-                use tauri_plugin_autostart::ManagerExt;
+                #[allow(unused_mut)]
                 let mut settings = {
                     let conn = state.db.lock();
                     db::load_settings(&conn)?
                 };
-                if let Ok(enabled) = app.autolaunch().is_enabled() {
-                    if settings.autostart != enabled {
-                        settings.autostart = enabled;
-                        let conn = state.db.lock();
-                        db::save_settings(&conn, &settings)?;
+                #[cfg(desktop)]
+                {
+                    use tauri_plugin_autostart::ManagerExt;
+                    if let Ok(enabled) = app.autolaunch().is_enabled() {
+                        if settings.autostart != enabled {
+                            settings.autostart = enabled;
+                            let conn = state.db.lock();
+                            db::save_settings(&conn, &settings)?;
+                        }
                     }
                 }
                 if let Some(w) = app.get_webview_window("main") {
@@ -72,10 +98,13 @@ pub fn run() {
                     };
                     let _ = w.set_theme(Some(theme));
                 }
-                let launched_by_autostart = std::env::args().any(|a| a == "--autostart");
-                if launched_by_autostart && settings.start_minimized {
-                    if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.hide();
+                #[cfg(desktop)]
+                {
+                    let launched_by_autostart = std::env::args().any(|a| a == "--autostart");
+                    if launched_by_autostart && settings.start_minimized {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.hide();
+                        }
                     }
                 }
             }
@@ -83,7 +112,10 @@ pub fn run() {
             #[cfg(windows)]
             ensure_notification_identity();
 
+            #[cfg(desktop)]
             setup_tray(app.handle())?;
+            // Android 端本阶段不启动提醒调度器（原生提醒属后续阶段）
+            #[cfg(desktop)]
             scheduler::spawn(app.handle().clone(), state.clone());
             logging::info(format!(
                 "应用启动：数据目录 {}，数据库 {}",
@@ -92,9 +124,10 @@ pub fn run() {
             ));
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                let app = window.app_handle();
+        .on_window_event(|_window, _event| {
+            #[cfg(desktop)]
+            if let WindowEvent::CloseRequested { api, .. } = _event {
+                let app = _window.app_handle();
                 let state = app.state::<Arc<AppState>>();
                 let close_to_tray = {
                     let conn = state.db.lock();
@@ -104,7 +137,7 @@ pub fn run() {
                 };
                 if close_to_tray {
                     api.prevent_close();
-                    let _ = window.hide();
+                    let _ = _window.hide();
                     logging::info("窗口已隐藏到系统托盘（提醒调度继续运行）");
                 } else {
                     logging::info("用户关闭应用窗口，应用即将退出");
@@ -165,11 +198,46 @@ pub fn run() {
             commands::validate_backup,
             commands::open_data_dir,
             commands::open_backup_dir,
-        ])
-        .run(tauri::generate_context!())
-        .expect("Local To Do 启动失败");
+            commands::sync_server_status,
+            commands::sync_server_start,
+            commands::sync_server_stop,
+            commands::sync_create_pairing,
+            commands::sync_cancel_pairing,
+            commands::sync_list_devices,
+            commands::sync_revoke_device,
+            commands::sync_reset_pairing,
+        ]);
+
+    // Android 只注册只读同步与查询命令，不暴露任何任务写接口
+    #[cfg(mobile)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        sync_client::commands::mobile_sync_state,
+        sync_client::commands::mobile_inspect_pairing,
+        sync_client::commands::mobile_pair,
+        sync_client::commands::mobile_sync_now,
+        sync_client::commands::mobile_unpair,
+        sync_client::commands::mobile_lists,
+        sync_client::commands::mobile_tasks,
+        sync_client::commands::mobile_task,
+        sync_client::commands::mobile_tasks_for_day,
+        sync_client::commands::mobile_calendar,
+        sync_client::commands::mobile_settings_get,
+        sync_client::commands::mobile_settings_update,
+    ]);
+
+    builder
+        .build(tauri::generate_context!())
+        .expect("Local To Do 启动失败")
+        .run(|app_handle, event| {
+            // 应用退出时确保同步服务停止并释放监听端口
+            if matches!(event, tauri::RunEvent::Exit) {
+                let state = app_handle.state::<Arc<AppState>>();
+                let _ = state.sync.stop();
+            }
+        });
 }
 
+#[cfg(desktop)]
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -224,6 +292,7 @@ fn ensure_notification_identity() {
     }
 }
 
+#[cfg(desktop)]
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "打开 Local To Do", true, None::<&str>)?;
     let new_task = MenuItem::with_id(app, "new_task", "新建任务", true, None::<&str>)?;

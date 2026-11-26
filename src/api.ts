@@ -153,6 +153,38 @@ export interface RestoreReport {
   recurrences: number;
 }
 
+export interface SyncStatus {
+  running: boolean;
+  protocolVersion: string;
+  host: string | null;
+  port: number | null;
+  fingerprint: string | null;
+  startedAt: number | null;
+  deviceCount: number;
+  pairingActive: boolean;
+  pairingExpiresAt: number | null;
+  firewallHint: string;
+  error: string | null;
+}
+
+export interface PairingInfo {
+  code: string;
+  expiresAt: number;
+  host: string;
+  port: number;
+  fingerprint: string;
+  protocolVersion: string;
+  payload: string;
+  qrSvg: string;
+}
+
+export interface SyncDevice {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastSeenAt: number | null;
+}
+
 export interface RecurrenceInput {
   kind: string;
   interval: number;
@@ -192,6 +224,69 @@ export interface View {
   listId?: string;
   /** 单日任务视图对应的日期 YYYY-MM-DD */
   date?: string;
+}
+
+/** Android 只读同步客户端的连接信息（不含令牌） */
+export interface MobileConnectionInfo {
+  host: string;
+  port: number;
+  fingerprint: string;
+  protocolVersion: string;
+  deviceId: string;
+  deviceName: string;
+  pairedAt: number;
+}
+
+export type MobileSyncPhase =
+  | "unpaired"
+  | "pairing"
+  | "paired"
+  | "firstSync"
+  | "syncing"
+  | "synced"
+  | "offline"
+  | "failed"
+  | "needsPairing";
+
+export interface MobileSyncCounts {
+  lists: number;
+  tasks: number;
+  recurrences: number;
+  steps: number;
+}
+
+export interface MobileSyncState {
+  paired: boolean;
+  connection: MobileConnectionInfo | null;
+  phase: MobileSyncPhase;
+  lastSyncAt: number | null;
+  lastRev: number;
+  needsSnapshot: boolean;
+  counts: MobileSyncCounts;
+  error: string | null;
+}
+
+export interface MobilePairingPreview {
+  host: string;
+  port: number;
+  fingerprint: string;
+  expiresAt: number;
+  protocolVersion: string;
+  expired: boolean;
+}
+
+/** Android 只读查询条件（仅影响展示结果） */
+export interface MobileTaskQuery {
+  scope?: "all" | "today" | "completed" | "list";
+  listId?: string | null;
+  search?: string | null;
+  includeCompleted?: boolean | null;
+}
+
+/** Android 本地设置，不参与 Windows 同步 */
+export interface MobileSettings {
+  notificationsEnabled: boolean;
+  reminderLeadMinutes: number;
 }
 
 export const api = {
@@ -270,4 +365,31 @@ export const api = {
   validateBackup: (path: string) => invoke<RestoreReport>("validate_backup", { path }),
   openDataDir: () => invoke<void>("open_data_dir"),
   openBackupDir: () => invoke<void>("open_backup_dir"),
+
+  syncServerStatus: () => invoke<SyncStatus>("sync_server_status"),
+  syncServerStart: () => invoke<SyncStatus>("sync_server_start"),
+  syncServerStop: () => invoke<SyncStatus>("sync_server_stop"),
+  syncCreatePairing: () => invoke<PairingInfo>("sync_create_pairing"),
+  syncCancelPairing: () => invoke<void>("sync_cancel_pairing"),
+  syncListDevices: () => invoke<SyncDevice[]>("sync_list_devices"),
+  syncRevokeDevice: (id: string) => invoke<SyncDevice[]>("sync_revoke_device", { id }),
+  syncResetPairing: () => invoke<SyncStatus>("sync_reset_pairing"),
+
+  mobileSyncState: () => invoke<MobileSyncState>("mobile_sync_state"),
+  mobileInspectPairing: (payload: string) =>
+    invoke<MobilePairingPreview>("mobile_inspect_pairing", { payload }),
+  mobilePair: (payload: string, deviceName: string) =>
+    invoke<MobileSyncState>("mobile_pair", { payload, deviceName }),
+  mobileSyncNow: () => invoke<MobileSyncState>("mobile_sync_now"),
+  mobileUnpair: () => invoke<MobileSyncState>("mobile_unpair"),
+
+  mobileLists: () => invoke<TaskList[]>("mobile_lists"),
+  mobileTasks: (query: MobileTaskQuery) => invoke<Task[]>("mobile_tasks", { query }),
+  mobileTask: (id: string) => invoke<Task>("mobile_task", { id }),
+  mobileTasksForDay: (date: string) => invoke<Task[]>("mobile_tasks_for_day", { date }),
+  mobileCalendar: (start: string, end: string) =>
+    invoke<CalendarDay[]>("mobile_calendar", { start, end }),
+  mobileSettingsGet: () => invoke<MobileSettings>("mobile_settings_get"),
+  mobileSettingsUpdate: (settings: MobileSettings) =>
+    invoke<MobileSettings>("mobile_settings_update", { settings }),
 };

@@ -14,7 +14,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+ltd-core = { path = "../crates/ltd-core" }
+tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
@@ -29,11 +30,33 @@ uuid = { version = "1", features = ["v4"] }
 csv = "1"
 chrono-tz = { version = "0.10.4", features = ["serde"] }
 
+# 局域网同步服务（Axum + rustls）。仅桌面端使用，但保持依赖平台无关，
+# 以便 workspace 在 Android 目标上仍可完成 cargo check。
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+sha2 = "0.10"
+subtle = "2"
+rand = "0.8"
+hex = "0.4"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+tower-http = { version = "0.6", features = ["timeout"] }
+tauri-plugin-barcode-scanner = "2"
+
+[dev-dependencies]
+ltd-core = { path = "../crates/ltd-core", features = ["test-utils"] }
+
+# 托盘等桌面能力仅在 Windows/macOS/Linux 启用，Android 上不编译相关特性
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_System_Registry", "Win32_Foundation", "Win32_Security", "Win32_Media_Audio"] }
 
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
-strip = true
+# Android 安全存储：通过 JNI 调用 Android Keystore 与 SharedPreferences
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"

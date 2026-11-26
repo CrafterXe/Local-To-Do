@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "主窗口默认权限：核心能力与本地文件选择对话框",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": ["core:default", "dialog:default", "barcode-scanner:default", "notification:default"]
 }
