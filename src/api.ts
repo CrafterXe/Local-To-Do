@@ -217,6 +217,7 @@ export type ViewKind =
   | "history"
   | "calendar"
   | "day"
+  | "lists"
   | "list";
 
 export interface View {
@@ -299,6 +300,8 @@ export interface ReminderStatus {
   ignoringBatteryOptimizations: boolean;
   skippedPast: number;
   skippedFar: number;
+  /** 超出系统一次性注册上限的后续提醒数量 */
+  truncated?: number;
   error: string | null;
 }
 
@@ -375,6 +378,7 @@ export const api = {
   exportJsonFile: (path: string) => invoke<string>("export_json_file", { path }),
   exportCsvFile: (path: string) => invoke<string>("export_csv_file", { path }),
   restoreBackup: (path: string) => invoke<RestoreReport>("restore_backup", { path }),
+  restoreBackupText: (text: string) => invoke<RestoreReport>("restore_backup_text", { text }),
   validateBackup: (path: string) => invoke<RestoreReport>("validate_backup", { path }),
   openDataDir: () => invoke<void>("open_data_dir"),
   openBackupDir: () => invoke<void>("open_backup_dir"),
@@ -411,4 +415,7 @@ export const api = {
     invoke<void>("mobile_reminder_open_exact_alarm_settings"),
   mobileReminderOpenBatterySettings: () =>
     invoke<void>("mobile_reminder_open_battery_settings"),
+  mobileReminderRequestNotifications: () =>
+    invoke<boolean>("mobile_reminder_request_notifications"),
+  mobileBackupShare: (path: string) => invoke<void>("mobile_backup_share", { path }),
 };

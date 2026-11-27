@@ -123,11 +123,8 @@ pub struct RestoreReport {
     pub recurrences: usize,
 }
 
-/// 从 JSON 备份恢复数据（覆盖现有数据；调用方需先征得用户确认）。
-/// 业务表替换在同一个 SQLite 事务中完成，任一插入失败都会整体回滚。
-pub fn restore_from_json(conn: &mut Connection, path: &Path) -> AppResult<RestoreReport> {
-    let text = fs::read_to_string(path)?;
-    let bundle: Value = serde_json::from_str(&text)?;
+fn parse_bundle(text: &str) -> AppResult<Value> {
+    let bundle: Value = serde_json::from_str(text)?;
     if bundle.get("format").and_then(|v| v.as_str()) != Some(FORMAT) {
         return err("不是有效的 Local To Do 备份文件");
     }
@@ -135,9 +132,44 @@ pub fn restore_from_json(conn: &mut Connection, path: &Path) -> AppResult<Restor
     if version > FORMAT_VERSION {
         return err("备份文件版本较新，当前应用无法恢复");
     }
-    let data = bundle
-        .get("data")
-        .ok_or_else(|| AppError::Other("备份文件缺少 data 字段".into()))?;
+    if bundle.get("data").is_none() {
+        return Err(AppError::Other("备份文件缺少 data 字段".into()));
+    }
+    Ok(bundle)
+}
+
+fn restore_report(bundle: &Value) -> RestoreReport {
+    let data = &bundle["data"];
+    let count = |name: &str| {
+        data.get(name)
+            .and_then(|v| v.as_array())
+            .map(|rows| rows.len())
+            .unwrap_or(0)
+    };
+    RestoreReport {
+        lists: count("lists"),
+        tasks: count("tasks"),
+        notes: count("notes"),
+        recurrences: count("recurrences"),
+    }
+}
+
+/// 校验内存中的 JSON 备份，不写数据库。
+pub fn validate_json_text(text: &str) -> AppResult<RestoreReport> {
+    parse_bundle(text).map(|bundle| restore_report(&bundle))
+}
+
+/// 从 JSON 文件恢复；桌面与移动端共用内存文本恢复实现。
+pub fn restore_from_json(conn: &mut Connection, path: &Path) -> AppResult<RestoreReport> {
+    let text = fs::read_to_string(path)?;
+    restore_from_json_text(conn, &text)
+}
+
+/// 从 JSON 文本恢复数据（覆盖现有数据；调用方需先征得用户确认）。
+/// 业务表替换在同一个 SQLite 事务中完成，格式错误或任一插入失败均保留原数据。
+pub fn restore_from_json_text(conn: &mut Connection, text: &str) -> AppResult<RestoreReport> {
+    let bundle = parse_bundle(text)?;
+    let data = &bundle["data"];
 
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM reminder_schedules", [])?;
@@ -161,17 +193,18 @@ pub fn restore_from_json(conn: &mut Connection, path: &Path) -> AppResult<Restor
     insert_rows(&tx, "task_steps", &get_rows("task_steps"))?;
     let notes = insert_rows(&tx, "notes", &get_rows("notes"))?;
     insert_rows(&tx, "task_history", &get_rows("task_history"))?;
-    tx.commit()?;
 
-    crate::db::refresh_all_reminders(conn)?;
+    // 所有后续写入也属于恢复事务：任一步失败都必须完整保留原数据。
+    crate::db::refresh_all_reminders_in_tx(&tx)?;
 
     // 恢复后更新最近备份时间
-    let mut s = load_settings(conn)?;
+    let mut s = load_settings(&tx)?;
     s.last_backup_at = Some(crate::domain::local_now_ms());
-    save_settings(conn, &s)?;
+    save_settings(&tx, &s)?;
 
-    // 整体替换数据后，通知手机端丢弃游标并重新拉取全量快照
-    crate::sync::record_reset(conn)?;
+    // 整体替换数据后，通知旧同步客户端丢弃游标并重新拉取全量快照。
+    crate::sync::record_reset(&tx)?;
+    tx.commit()?;
 
     Ok(RestoreReport {
         lists,
@@ -179,4 +212,129 @@ pub fn restore_from_json(conn: &mut Connection, path: &Path) -> AppResult<Restor
         notes,
         recurrences,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+
+    #[test]
+    fn invalid_or_future_text_restore_preserves_original_data() {
+        let db = Db::open_memory().unwrap();
+        let mut conn = db.lock();
+        conn.execute(
+            "INSERT INTO notes (id, title, body, created_at, updated_at)
+             VALUES ('note-original', '原标题', '正文', 1, 1)",
+            [],
+        )
+        .unwrap();
+        let original_lists: i64 = conn
+            .query_row("SELECT COUNT(*) FROM lists", [], |row| row.get(0))
+            .unwrap();
+        let mut bundle = export_bundle(&conn).unwrap();
+
+        bundle["version"] = Value::from(FORMAT_VERSION + 1);
+        let future = serde_json::to_string(&bundle).unwrap();
+        assert!(restore_from_json_text(&mut conn, &future).is_err());
+        assert!(validate_json_text(&future).is_err());
+
+        bundle["version"] = Value::from(FORMAT_VERSION);
+        bundle["data"]["notes"] = serde_json::json!([{"id": "broken"}]);
+        let malformed = serde_json::to_string(&bundle).unwrap();
+        assert!(restore_from_json_text(&mut conn, &malformed).is_err());
+
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM notes WHERE id='note-original'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let lists: i64 = conn
+            .query_row("SELECT COUNT(*) FROM lists", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(title, "原标题");
+        assert_eq!(lists, original_lists);
+    }
+
+    #[test]
+    fn post_insert_reminder_failure_rolls_back_entire_restore() {
+        let db = Db::open_memory().unwrap();
+        let mut conn = db.lock();
+        conn.execute(
+            "INSERT INTO notes (id, title, body, created_at, updated_at)
+             VALUES ('note-original', '原数据', '不得丢失', 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        let imported = Db::open_memory().unwrap();
+        let text = {
+            let imported_conn = imported.lock();
+            let list_id: String = imported_conn
+                .query_row("SELECT id FROM lists LIMIT 1", [], |row| row.get(0))
+                .unwrap();
+            imported_conn
+                .execute(
+                    "INSERT INTO tasks
+                     (id, list_id, title, due_date, due_time, reminder_offset,
+                      reminder_enabled, created_at, updated_at)
+                     VALUES ('task-imported', ?1, '导入任务', '2099-01-01', '09:00', 0, 1, 1, 1)",
+                    [list_id],
+                )
+                .unwrap();
+            serde_json::to_string(&export_bundle(&imported_conn).unwrap()).unwrap()
+        };
+
+        // 强制提醒计划在业务行插入之后失败，验证后续步骤仍处于同一事务。
+        conn.execute_batch(
+            "CREATE TRIGGER fail_restore_schedule BEFORE INSERT ON reminder_schedules
+             BEGIN SELECT RAISE(ABORT, 'forced reminder failure'); END;",
+        )
+        .unwrap();
+        assert!(restore_from_json_text(&mut conn, &text).is_err());
+
+        let original: String = conn
+            .query_row(
+                "SELECT title FROM notes WHERE id='note-original'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let imported_tasks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE id='task-imported'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(original, "原数据");
+        assert_eq!(imported_tasks, 0);
+    }
+
+    #[test]
+    fn text_restore_roundtrip_and_validation() {
+        let db = Db::open_memory().unwrap();
+        let mut conn = db.lock();
+        conn.execute(
+            "INSERT INTO notes (id, title, body, created_at, updated_at)
+             VALUES ('note-1', '文本恢复', '内容', 1, 1)",
+            [],
+        )
+        .unwrap();
+        let text = serde_json::to_string(&export_bundle(&conn).unwrap()).unwrap();
+        let report = validate_json_text(&text).unwrap();
+        assert_eq!(report.notes, 1);
+
+        conn.execute("DELETE FROM notes", []).unwrap();
+        let restored = restore_from_json_text(&mut conn, &text).unwrap();
+        assert_eq!(restored.notes, 1);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes WHERE id='note-1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
 }

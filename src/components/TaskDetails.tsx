@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type RecurrenceInput, type Task, type TaskInput, type TaskList } from "../api";
 import {
+  addDays,
   combineReminderOffset,
   formatDueFull,
   formatFullDateTime,
@@ -294,10 +295,17 @@ export function TaskDetails({
                 ) : (
                   <input
                     readOnly
+                    aria-label={`编辑步骤：${s.title}`}
                     value={s.title}
                     onDoubleClick={() => {
                       setEditingStep(s.id);
                       setStepText(s.title);
+                    }}
+                    onClick={() => {
+                      if (window.matchMedia("(pointer: coarse)").matches) {
+                        setEditingStep(s.id);
+                        setStepText(s.title);
+                      }
                     }}
                   />
                 )}
@@ -601,6 +609,10 @@ function CalendarPanel({
             }}
           />
         </div>
+      </div>
+      <div className="calendar-quick">
+        <button className="chip" onClick={() => setSelected(todayString())}>今天</button>
+        <button className="chip" onClick={() => setSelected(addDays(todayString(), 1))}>明天</button>
       </div>
       <div className="calendar-actions">
         <button className="btn small" onClick={onCancel}>

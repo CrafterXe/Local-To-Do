@@ -8,6 +8,8 @@ use ltd_core::db::load_settings;
 use ltd_core::error::AppResult;
 use ltd_core::models::BackupEntry;
 
+#[cfg(mobile)]
+pub use ltd_core::backup::restore_from_json_text;
 pub use ltd_core::backup::{export_json, restore_from_json, RestoreReport};
 
 const KEEP_BACKUPS: usize = 20;

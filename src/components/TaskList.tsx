@@ -123,6 +123,8 @@ export function TaskList({
           <input
             ref={inputRef}
             value={draft}
+            placeholder="添加任务"
+            aria-label="添加任务"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void submit();

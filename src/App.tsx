@@ -25,7 +25,7 @@ import { SettingsView } from "./components/SettingsView";
 import { HistoryView } from "./components/HistoryView";
 import { ListModal } from "./components/ListModal";
 import { ConfirmModal } from "./components/Modal";
-import { MobileSyncApp } from "./mobile/MobileSyncApp";
+import { MobileOfflineApp } from "./mobile/MobileOfflineApp";
 import { IconBell, IconCalendar, IconPlus, IconRefresh } from "./components/Icons";
 import {
   currentWeekNumber,
@@ -1033,5 +1033,5 @@ function isAndroid(): boolean {
 }
 
 export default function App() {
-  return isAndroid() ? <MobileSyncApp /> : <DesktopApp />;
+  return isAndroid() ? <MobileOfflineApp /> : <DesktopApp />;
 }

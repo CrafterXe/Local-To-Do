@@ -18,13 +18,19 @@ impl Db {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        // 未来版本的数据库必须原样保留：在 WAL、迁移、seed 等任何写入之前拒绝。
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version > SCHEMA_VERSION {
+            return Err(AppError::Other(format!(
+                "数据库版本 {version} 高于当前支持的版本 {SCHEMA_VERSION}，请升级应用后再打开"
+            )));
+        }
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
         // 迁移前先复制数据库文件；迁移本身在事务中执行，失败自动回滚
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         let backup = if version > 0 && version < SCHEMA_VERSION {
             Some(backup_before_migration(&conn, path, version)?)
         } else {
@@ -388,51 +394,54 @@ fn seed(conn: &Connection) -> AppResult<()> {
 
 /// 启动时重建所有未完成任务的提醒计划（应对系统时间/时区变化）
 pub fn refresh_all_reminders(conn: &Connection) -> AppResult<()> {
+    crate::repo::in_tx(conn, refresh_all_reminders_in_tx)
+}
+
+/// 在调用方已有事务中重建提醒，供备份恢复等复合原子操作复用。
+pub(crate) fn refresh_all_reminders_in_tx(conn: &Connection) -> AppResult<()> {
     use crate::domain::compute_reminder_at;
-    crate::repo::in_tx(conn, |conn| {
-        let rows: Vec<(
-            String,
-            Option<String>,
-            Option<String>,
-            Option<i64>,
-            i64,
-            Option<i64>,
-        )> = {
-            let mut stmt = conn.prepare(
-                "SELECT id, due_date, due_time, reminder_offset, reminder_enabled, reminder_at
-                 FROM tasks WHERE is_completed = 0 AND deleted_at IS NULL",
-            )?;
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            })?;
-            rows.collect::<Result<_, _>>()?
+    let rows: Vec<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        i64,
+        Option<i64>,
+    )> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, due_date, due_time, reminder_offset, reminder_enabled, reminder_at
+             FROM tasks WHERE is_completed = 0 AND deleted_at IS NULL",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for (id, date, time, offset, enabled, old_at) in rows {
+        let at = if enabled != 0 {
+            // 开关开启但没有历史方案时按「准时提醒」处理
+            compute_reminder_at(date.as_deref(), time.as_deref(), offset.or(Some(0)))
+        } else {
+            None
         };
-        for (id, date, time, offset, enabled, old_at) in rows {
-            let at = if enabled != 0 {
-                // 开关开启但没有历史方案时按「准时提醒」处理
-                compute_reminder_at(date.as_deref(), time.as_deref(), offset.or(Some(0)))
-            } else {
-                None
-            };
-            if at != old_at {
-                conn.execute(
-                    "UPDATE tasks SET reminder_at = ?1 WHERE id = ?2",
-                    rusqlite::params![at, id],
-                )?;
-                // 提醒时刻变化同样属于任务数据变化
-                crate::sync::log_task(conn, &id)?;
-            }
-            crate::repo::sync_schedule(conn, &id, at)?;
+        if at != old_at {
+            conn.execute(
+                "UPDATE tasks SET reminder_at = ?1 WHERE id = ?2",
+                rusqlite::params![at, id],
+            )?;
+            // 提醒时刻变化同样属于任务数据变化
+            crate::sync::log_task(conn, &id)?;
         }
-        Ok(())
-    })
+        crate::repo::sync_schedule(conn, &id, at)?;
+    }
+    Ok(())
 }
 
 /// 设置读写（避免循环依赖，放在 db 模块）
@@ -572,5 +581,49 @@ pub fn stats(conn: &Connection, path: &Path) -> AppResult<DbStats> {
 impl From<AppError> for String {
     fn from(e: AppError) -> String {
         e.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn future_database_is_rejected_without_modifying_it() {
+        let dir = std::env::temp_dir().join(format!("ltd-future-db-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("local-to-do.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!(
+                "PRAGMA user_version = {};
+                 CREATE TABLE future_marker (value TEXT NOT NULL);
+                 INSERT INTO future_marker VALUES ('keep');",
+                SCHEMA_VERSION + 1
+            ))
+            .unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+
+        let error = match Db::open(&path) {
+            Err(error) => error,
+            Ok(_) => panic!("未来版本数据库必须被拒绝"),
+        };
+        assert!(error.to_string().contains("高于当前支持的版本"));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(!path.with_file_name("local-to-do.db-wal").exists());
+        assert!(!path.with_file_name("local-to-do.db-shm").exists());
+
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let marker: String = conn
+            .query_row("SELECT value FROM future_marker", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION + 1);
+        assert_eq!(marker, "keep");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

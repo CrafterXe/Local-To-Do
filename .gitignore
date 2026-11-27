@@ -4,6 +4,7 @@ dist-ssr
 *.local
 .vite
 src-tauri/target
-src-tauri/gen
+src-tauri/gen/*
+!src-tauri/gen/android/
 *.log
 .DS_Store

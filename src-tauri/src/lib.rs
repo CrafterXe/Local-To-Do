@@ -17,11 +17,11 @@ use ltd_core::db;
 use tauri::menu::{Menu, MenuItem};
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-#[cfg(desktop)]
-use tauri::{AppHandle, Emitter};
 use tauri::Manager;
 #[cfg(desktop)]
 use tauri::WindowEvent;
+#[cfg(desktop)]
+use tauri::{AppHandle, Emitter};
 #[cfg(desktop)]
 use tauri_plugin_window_state::StateFlags;
 
@@ -51,10 +51,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
 
-    // 扫码插件仅在移动端可用，桌面端不注册
-    #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
-
     let builder = builder
         .setup(|app| {
             // 仅用于隔离测试：设置 LTD_DATA_DIR 时改用该目录，避免触碰真实用户数据。
@@ -71,6 +67,15 @@ pub fn run() {
             let backup_dir = data_dir.join("backups");
             let state = Arc::new(AppState::new(db, data_dir.clone(), backup_dir, log_dir));
             app.manage(state.clone());
+
+            #[cfg(mobile)]
+            {
+                sync_client::commands::auto_backup_if_due(&state);
+                let status = sync_client::commands::resync_from_db(&state);
+                if let Some(error) = status.error {
+                    logging::warn(format!("Android 启动提醒恢复失败：{error}"));
+                }
+            }
 
             // 同步开机自启的真实状态（用户可能在系统设置里改过）
             {
@@ -143,100 +148,144 @@ pub fn run() {
                     logging::info("用户关闭应用窗口，应用即将退出");
                 }
             }
-        })
-        .invoke_handler(tauri::generate_handler![
-            commands::list_lists,
-            commands::create_list,
-            commands::update_list,
-            commands::delete_list,
-            commands::reorder_lists,
-            commands::list_deleted_lists,
-            commands::restore_list,
-            commands::purge_list,
-            commands::list_tasks,
-            commands::calendar_month,
-            commands::list_tasks_for_day,
-            commands::list_notified_tasks,
-            commands::get_task,
-            commands::create_task,
-            commands::update_task,
-            commands::set_important,
-            commands::set_my_day,
-            commands::move_task,
-            commands::complete_task,
-            commands::delete_task,
-            commands::restore_task,
-            commands::purge_task,
-            commands::empty_deleted,
-            commands::reorder_tasks,
-            commands::sidebar_counts,
-            commands::add_step,
-            commands::update_step,
-            commands::delete_step,
-            commands::list_history,
-            commands::list_task_history,
-            commands::list_notes,
-            commands::get_note,
-            commands::create_note,
-            commands::update_note,
-            commands::delete_note,
-            commands::get_settings,
-            commands::update_settings,
-            commands::reset_settings,
-            commands::resync_reminders,
-            commands::get_app_info,
-            commands::get_db_stats,
-            commands::send_test_notification,
-            commands::preview_sound,
-            commands::check_sound_file,
-            commands::get_next_reminder,
-            commands::create_backup,
-            commands::list_backups,
-            commands::export_json_file,
-            commands::export_csv_file,
-            commands::restore_backup,
-            commands::validate_backup,
-            commands::open_data_dir,
-            commands::open_backup_dir,
-            commands::sync_server_status,
-            commands::sync_server_start,
-            commands::sync_server_stop,
-            commands::sync_create_pairing,
-            commands::sync_cancel_pairing,
-            commands::sync_list_devices,
-            commands::sync_revoke_device,
-            commands::sync_reset_pairing,
-        ]);
+        });
 
-    // Android 只注册只读同步与查询命令，不暴露任何任务写接口
+    #[cfg(desktop)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::list_lists,
+        commands::create_list,
+        commands::update_list,
+        commands::delete_list,
+        commands::reorder_lists,
+        commands::list_deleted_lists,
+        commands::restore_list,
+        commands::purge_list,
+        commands::list_tasks,
+        commands::calendar_month,
+        commands::list_tasks_for_day,
+        commands::list_notified_tasks,
+        commands::get_task,
+        commands::create_task,
+        commands::update_task,
+        commands::set_important,
+        commands::set_my_day,
+        commands::move_task,
+        commands::complete_task,
+        commands::delete_task,
+        commands::restore_task,
+        commands::purge_task,
+        commands::empty_deleted,
+        commands::reorder_tasks,
+        commands::sidebar_counts,
+        commands::add_step,
+        commands::update_step,
+        commands::delete_step,
+        commands::list_history,
+        commands::list_task_history,
+        commands::list_notes,
+        commands::get_note,
+        commands::create_note,
+        commands::update_note,
+        commands::delete_note,
+        commands::get_settings,
+        commands::update_settings,
+        commands::reset_settings,
+        commands::resync_reminders,
+        commands::get_app_info,
+        commands::get_db_stats,
+        commands::send_test_notification,
+        commands::preview_sound,
+        commands::check_sound_file,
+        commands::get_next_reminder,
+        commands::create_backup,
+        commands::list_backups,
+        commands::export_json_file,
+        commands::export_csv_file,
+        commands::restore_backup,
+        commands::validate_backup,
+        commands::open_data_dir,
+        commands::open_backup_dir,
+        commands::sync_server_status,
+        commands::sync_server_start,
+        commands::sync_server_stop,
+        commands::sync_create_pairing,
+        commands::sync_cancel_pairing,
+        commands::sync_list_devices,
+        commands::sync_revoke_device,
+        commands::sync_reset_pairing,
+    ]);
+
+    // Android 独立版：完整本地业务命令，不注册配对、同步客户端或扫码能力。
     #[cfg(mobile)]
     let builder = builder.invoke_handler(tauri::generate_handler![
-        sync_client::commands::mobile_sync_state,
-        sync_client::commands::mobile_inspect_pairing,
-        sync_client::commands::mobile_pair,
-        sync_client::commands::mobile_sync_now,
-        sync_client::commands::mobile_unpair,
-        sync_client::commands::mobile_lists,
-        sync_client::commands::mobile_tasks,
-        sync_client::commands::mobile_task,
-        sync_client::commands::mobile_tasks_for_day,
-        sync_client::commands::mobile_calendar,
-        sync_client::commands::mobile_settings_get,
-        sync_client::commands::mobile_settings_update,
+        commands::list_lists,
+        commands::create_list,
+        commands::update_list,
+        commands::delete_list,
+        commands::reorder_lists,
+        commands::list_deleted_lists,
+        commands::restore_list,
+        commands::purge_list,
+        commands::list_tasks,
+        commands::calendar_month,
+        commands::list_tasks_for_day,
+        commands::list_notified_tasks,
+        commands::get_task,
+        commands::create_task,
+        commands::update_task,
+        commands::set_important,
+        commands::set_my_day,
+        commands::move_task,
+        commands::complete_task,
+        commands::delete_task,
+        commands::restore_task,
+        commands::purge_task,
+        commands::empty_deleted,
+        commands::reorder_tasks,
+        commands::sidebar_counts,
+        commands::add_step,
+        commands::update_step,
+        commands::delete_step,
+        commands::list_history,
+        commands::list_task_history,
+        commands::list_notes,
+        commands::get_note,
+        commands::create_note,
+        commands::update_note,
+        commands::delete_note,
+        commands::get_settings,
+        commands::update_settings,
+        commands::reset_settings,
+        commands::resync_reminders,
+        commands::get_app_info,
+        commands::get_db_stats,
+        commands::send_test_notification,
+        commands::get_next_reminder,
+        commands::create_backup,
+        commands::list_backups,
+        commands::export_json_file,
+        commands::export_csv_file,
+        commands::restore_backup,
+        commands::restore_backup_text,
+        commands::validate_backup,
         sync_client::commands::mobile_reminders_resync,
         sync_client::commands::mobile_reminder_status,
+        sync_client::commands::mobile_reminder_request_notifications,
         sync_client::commands::mobile_reminder_open_exact_alarm_settings,
         sync_client::commands::mobile_reminder_open_battery_settings,
+        sync_client::commands::mobile_backup_share,
     ]);
 
     builder
         .build(tauri::generate_context!())
         .expect("Local To Do 启动失败")
         .run(|app_handle, event| {
-            // 应用退出时确保同步服务停止并释放监听端口
+            // 桌面端退出时释放同步监听端口；独立 Android 版不创建该服务。
             if matches!(event, tauri::RunEvent::Exit) {
                 let state = app_handle.state::<Arc<AppState>>();
-                let _ = state.sync.stop();
+                if let Some(sync) = state.sync.as_ref() {
+                    let _ = sync.stop();
+                }
             }
         });
 }
@@ -257,14 +306,17 @@ fn ensure_notification_identity() {
     use windows::core::HSTRING;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
-        KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE,
+        REG_OPTION_NON_VOLATILE, REG_SZ,
     };
 
     fn set_string(key: HKEY, name: &str, value: &str) {
         let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
         let bytes = unsafe {
-            std::slice::from_raw_parts(wide.as_ptr() as *const u8, wide.len() * std::mem::size_of::<u16>())
+            std::slice::from_raw_parts(
+                wide.as_ptr() as *const u8,
+                wide.len() * std::mem::size_of::<u16>(),
+            )
         };
         unsafe {
             let _ = RegSetValueExW(key, &HSTRING::from(name), None, REG_SZ, Some(bytes));

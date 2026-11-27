@@ -18,7 +18,7 @@ mod engine;
 mod http;
 mod pairing;
 mod pinned;
-mod reminders;
+pub(crate) mod reminders;
 mod secrets;
 mod settings;
 #[cfg(test)]

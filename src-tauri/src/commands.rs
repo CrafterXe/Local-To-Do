@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::backup::{self, RestoreReport};
 use crate::state::AppState;
 use ltd_core::db::{self, DbStats};
-use ltd_core::error::{err, AppResult};
+use ltd_core::error::AppResult;
 use ltd_core::models::{
     AppInfo, AppSettings, BackupEntry, DeletedList, HistoryEntry, Note, Task, TaskList, TaskQuery,
 };
@@ -45,7 +45,10 @@ pub fn update_list(
     icon: String,
 ) -> AppResult<TaskList> {
     let conn = state.db.lock();
-    repo::update_list(&conn, &id, &name, &color, &icon)
+    let result = repo::update_list(&conn, &id, &name, &color, &icon);
+    drop(conn);
+    state.notify_scheduler();
+    result
 }
 
 #[tauri::command]
@@ -86,7 +89,10 @@ pub fn restore_list(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()
 #[tauri::command]
 pub fn purge_list(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
     let conn = state.db.lock();
-    repo::purge_list(&conn, &id)
+    let result = repo::purge_list(&conn, &id);
+    drop(conn);
+    state.notify_scheduler();
+    result
 }
 
 // ---------------- 任务 ----------------
@@ -138,7 +144,11 @@ pub fn create_task(state: State<'_, Arc<AppState>>, input: TaskInput) -> AppResu
 }
 
 #[tauri::command]
-pub fn update_task(state: State<'_, Arc<AppState>>, id: String, input: TaskInput) -> AppResult<Task> {
+pub fn update_task(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    input: TaskInput,
+) -> AppResult<Task> {
     let conn = state.db.lock();
     let result = repo::update_task(&conn, &id, &input);
     drop(conn);
@@ -147,7 +157,11 @@ pub fn update_task(state: State<'_, Arc<AppState>>, id: String, input: TaskInput
 }
 
 #[tauri::command]
-pub fn set_important(state: State<'_, Arc<AppState>>, id: String, important: bool) -> AppResult<Task> {
+pub fn set_important(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    important: bool,
+) -> AppResult<Task> {
     let conn = state.db.lock();
     repo::set_important(&conn, &id, important)
 }
@@ -161,7 +175,10 @@ pub fn set_my_day(state: State<'_, Arc<AppState>>, id: String, add: bool) -> App
 #[tauri::command]
 pub fn move_task(state: State<'_, Arc<AppState>>, id: String, list_id: String) -> AppResult<Task> {
     let conn = state.db.lock();
-    repo::move_task(&conn, &id, &list_id)
+    let result = repo::move_task(&conn, &id, &list_id);
+    drop(conn);
+    state.notify_scheduler();
+    result
 }
 
 #[tauri::command]
@@ -198,13 +215,19 @@ pub fn restore_task(state: State<'_, Arc<AppState>>, id: String) -> AppResult<Ta
 #[tauri::command]
 pub fn purge_task(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
     let conn = state.db.lock();
-    repo::purge_task(&conn, &id)
+    let result = repo::purge_task(&conn, &id);
+    drop(conn);
+    state.notify_scheduler();
+    result
 }
 
 #[tauri::command]
 pub fn empty_deleted(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     let conn = state.db.lock();
-    repo::empty_deleted(&conn)
+    let result = repo::empty_deleted(&conn);
+    drop(conn);
+    state.notify_scheduler();
+    result
 }
 
 #[tauri::command]
@@ -220,7 +243,11 @@ pub fn sidebar_counts(state: State<'_, Arc<AppState>>) -> AppResult<SidebarCount
 }
 
 #[tauri::command]
-pub fn add_step(state: State<'_, Arc<AppState>>, task_id: String, title: String) -> AppResult<Task> {
+pub fn add_step(
+    state: State<'_, Arc<AppState>>,
+    task_id: String,
+    title: String,
+) -> AppResult<Task> {
     let conn = state.db.lock();
     repo::add_step(&conn, &task_id, &title)
 }
@@ -252,7 +279,10 @@ pub fn list_history(
 }
 
 #[tauri::command]
-pub fn list_task_history(state: State<'_, Arc<AppState>>, task_id: String) -> AppResult<Vec<HistoryEntry>> {
+pub fn list_task_history(
+    state: State<'_, Arc<AppState>>,
+    task_id: String,
+) -> AppResult<Vec<HistoryEntry>> {
     let conn = state.db.lock();
     repo::list_task_history(&conn, &task_id)
 }
@@ -272,7 +302,11 @@ pub fn get_note(state: State<'_, Arc<AppState>>, id: String) -> AppResult<Note> 
 }
 
 #[tauri::command]
-pub fn create_note(state: State<'_, Arc<AppState>>, title: String, body: String) -> AppResult<Note> {
+pub fn create_note(
+    state: State<'_, Arc<AppState>>,
+    title: String,
+    body: String,
+) -> AppResult<Note> {
     let conn = state.db.lock();
     repo::create_note(&conn, &title, &body)
 }
@@ -409,6 +443,7 @@ pub fn get_db_stats(state: State<'_, Arc<AppState>>) -> AppResult<DbStats> {
     db::stats(&conn, &state.db.path)
 }
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub fn send_test_notification(app: AppHandle) -> AppResult<bool> {
     let ok = crate::scheduler::send_notification(
@@ -417,6 +452,16 @@ pub fn send_test_notification(app: AppHandle) -> AppResult<bool> {
         "如果你看到了这条通知，说明系统提醒功能工作正常。",
     );
     Ok(ok)
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn send_test_notification() -> AppResult<bool> {
+    crate::sync_client::reminders::send_test_notification(
+        "Local To Do 测试通知",
+        "如果你看到了这条通知，说明系统提醒功能工作正常。",
+    )
+    .map_err(ltd_core::error::AppError::Other)
 }
 
 #[tauri::command]
@@ -483,28 +528,28 @@ pub fn restore_backup(
     Ok(report)
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub fn restore_backup_text(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    text: String,
+) -> AppResult<RestoreReport> {
+    let mut conn = state.db.lock();
+    let report = match backup::restore_from_json_text(&mut conn, &text) {
+        Ok(report) => report,
+        Err(error) => return Err(error),
+    };
+    drop(conn);
+    state.notify_scheduler();
+    let _ = app.emit("data-restored", report.clone());
+    Ok(report)
+}
+
 #[tauri::command]
 pub fn validate_backup(path: String) -> AppResult<RestoreReport> {
     let text = std::fs::read_to_string(&path)?;
-    let bundle: serde_json::Value = serde_json::from_str(&text)?;
-    if bundle.get("format").and_then(|v| v.as_str()) != Some("local-to-do-backup") {
-        return err("不是有效的 Local To Do 备份文件");
-    }
-    let data = bundle
-        .get("data")
-        .ok_or_else(|| ltd_core::error::AppError::Other("备份文件缺少数据".into()))?;
-    let count = |name: &str| {
-        data.get(name)
-            .and_then(|v| v.as_array())
-            .map(|a| a.len())
-            .unwrap_or(0)
-    };
-    Ok(RestoreReport {
-        lists: count("lists"),
-        tasks: count("tasks"),
-        notes: count("notes"),
-        recurrences: count("recurrences"),
-    })
+    ltd_core::backup::validate_json_text(&text)
 }
 
 #[tauri::command]
@@ -527,7 +572,7 @@ pub fn open_backup_dir(app: AppHandle, state: State<'_, Arc<AppState>>) -> AppRe
 
 #[tauri::command]
 pub fn sync_server_status(state: State<'_, Arc<AppState>>) -> crate::sync_server::SyncStatus {
-    state.sync.status()
+    state.sync().status()
 }
 
 /// 开启同步服务：自动选择家庭局域网地址并监听默认端口
@@ -535,14 +580,14 @@ pub fn sync_server_status(state: State<'_, Arc<AppState>>) -> crate::sync_server
 pub fn sync_server_start(
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<crate::sync_server::SyncStatus> {
-    state.sync.start()
+    state.sync().start()
 }
 
 #[tauri::command]
 pub fn sync_server_stop(
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<crate::sync_server::SyncStatus> {
-    state.sync.stop()
+    state.sync().stop()
 }
 
 /// 生成一次性配对码与二维码（需服务已开启）
@@ -550,12 +595,12 @@ pub fn sync_server_stop(
 pub fn sync_create_pairing(
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<crate::sync_server::PairingInfo> {
-    state.sync.create_pairing()
+    state.sync().create_pairing()
 }
 
 #[tauri::command]
 pub fn sync_cancel_pairing(state: State<'_, Arc<AppState>>) -> AppResult<()> {
-    state.sync.cancel_pairing();
+    state.sync().cancel_pairing();
     Ok(())
 }
 
@@ -563,7 +608,7 @@ pub fn sync_cancel_pairing(state: State<'_, Arc<AppState>>) -> AppResult<()> {
 pub fn sync_list_devices(
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<Vec<crate::sync_server::DeviceView>> {
-    state.sync.list_devices()
+    state.sync().list_devices()
 }
 
 #[tauri::command]
@@ -571,7 +616,7 @@ pub fn sync_revoke_device(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> AppResult<Vec<crate::sync_server::DeviceView>> {
-    state.sync.revoke_device(&id)
+    state.sync().revoke_device(&id)
 }
 
 /// 重置配对：清除已授权设备并更换证书，需要手机重新扫码配对
@@ -579,5 +624,5 @@ pub fn sync_revoke_device(
 pub fn sync_reset_pairing(
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<crate::sync_server::SyncStatus> {
-    state.sync.reset_pairing()
+    state.sync().reset_pairing()
 }

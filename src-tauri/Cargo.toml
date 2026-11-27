@@ -44,7 +44,6 @@ rand = "0.8"
 hex = "0.4"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 tower-http = { version = "0.6", features = ["timeout"] }
-tauri-plugin-barcode-scanner = "2"
 
 [dev-dependencies]
 ltd-core = { path = "../crates/ltd-core", features = ["test-utils"] }
