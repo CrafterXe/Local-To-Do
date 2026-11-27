@@ -12,3 +12,7 @@ src-tauri/gen/*
 *.jks
 *.keystore
 release-keystore.jks
+publish/*.exe
+installer/stage/
+installer/*.sed
+publish/fallback/*.exe
