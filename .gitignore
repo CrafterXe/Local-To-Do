@@ -8,3 +8,7 @@ src-tauri/gen/*
 !src-tauri/gen/android/
 *.log
 .DS_Store
+
+*.jks
+*.keystore
+release-keystore.jks

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, type Note } from "../api";
-import { IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconTrash, IconX } from "../components/Icons";
 import { formatTimestamp } from "../utils/date";
 
 interface Props {
@@ -26,6 +26,10 @@ export function MobileNoteDetail({ note, onClose, onSaved, onDelete, notify }: P
     savedRef.current = JSON.stringify({ title: note.title, body: note.body });
   }, [note.id, note.title, note.body]);
 
+  const isDirty = useCallback(() => {
+    return JSON.stringify(latestRef.current) !== savedRef.current;
+  }, []);
+
   const save = useCallback(async () => {
     const draft = latestRef.current;
     const serialized = JSON.stringify(draft);
@@ -35,6 +39,7 @@ export function MobileNoteDetail({ note, onClose, onSaved, onDelete, notify }: P
       const updated = await api.updateNote(note.id, draft.title, draft.body);
       savedRef.current = serialized;
       onSaved(updated);
+      notify("已保存");
     } catch (error) {
       notify(`保存备忘录失败：${String(error)}`, true);
     } finally {
@@ -42,18 +47,34 @@ export function MobileNoteDetail({ note, onClose, onSaved, onDelete, notify }: P
     }
   }, [note.id, notify, onSaved]);
 
+  // 自动保存（debounce 500ms）
   useEffect(() => {
     const timer = window.setTimeout(() => void save(), 500);
     return () => window.clearTimeout(timer);
   }, [title, body, save]);
 
+  const handleClose = useCallback(() => {
+    if (isDirty()) {
+      void save().then(onClose);
+    } else {
+      onClose();
+    }
+  }, [isDirty, save, onClose]);
+
   return (
     <section className="offline-note-detail">
       <header className="offline-note-header">
-        <span>{saving ? "正在保存…" : "备忘录 · 自动保存"}</span>
-        <button className="offline-icon" onClick={() => void save().then(onClose)} aria-label="关闭备忘录">
-          <IconX size={19} />
-        </button>
+        <span>{saving ? "正在保存…" : isDirty() ? "备忘录 · 未保存" : "备忘录 · 已保存"}</span>
+        <div style={{ display: "flex", gap: 4 }}>
+          {isDirty() && !saving ? (
+            <button className="offline-icon" onClick={() => void save()} aria-label="保存备忘录" title="保存">
+              <IconCheck size={19} />
+            </button>
+          ) : null}
+          <button className="offline-icon" onClick={handleClose} aria-label="关闭备忘录">
+            <IconX size={19} />
+          </button>
+        </div>
       </header>
       <div className="offline-note-editor">
         <input

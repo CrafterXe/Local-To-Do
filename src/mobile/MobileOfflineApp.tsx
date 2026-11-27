@@ -120,7 +120,7 @@ export function MobileOfflineApp() {
   const [stats, setStats] = useState<DbStats | null>(null);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [reminderStatus, setReminderStatus] = useState<ReminderStatus | null>(null);
-  const [view, setView] = useState<View>({ kind: "myDay" });
+  const [view, setView] = useState<View>({ kind: "all" });
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [deletedLists, setDeletedLists] = useState<DeletedList[]>([]);
@@ -135,7 +135,7 @@ export function MobileOfflineApp() {
   });
   const [revision, setRevision] = useState(0);
   const [searches, setSearches] = useState<Record<string, string>>({});
-  const [sortBy, setSortBy] = useState<SortKind>(() => readSort("myDay"));
+  const [sortBy, setSortBy] = useState<SortKind>(() => readSort("all"));
   const [focusSignal, setFocusSignal] = useState(0);
   const [panel, setPanel] = useState<Panel>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -146,6 +146,7 @@ export function MobileOfflineApp() {
   const taskCache = useRef(new Map<string, Task[]>());
   const scrollPositions = useRef(new Map<string, number>());
   const completionLock = useRef(new Map<string, number>());
+  const skipNextPopRef = useRef(false);
   const currentKey = viewKey(view);
   const search = searches[currentKey] ?? "";
 
@@ -326,13 +327,37 @@ export function MobileOfflineApp() {
 
   useEffect(() => {
     const onPopState = () => {
-      panelRef.current = null;
-      setPanel(null);
-      setSelectedTask(null);
+      // 如果是我们主动发起的 history.back()，跳过这次拦截
+      if (skipNextPopRef.current) {
+        skipNextPopRef.current = false;
+        return;
+      }
+      // 状态机式返回：
+      // 1) 有 panel（详情抽屉/nav drawer）→ 先关 panel
+      // 2) view 不是 "all" → 切到 "all"，不退出
+      // 3) 都满足 → 正常退出（让系统继续处理 popstate）
+      if (panelRef.current) {
+        panelRef.current = null;
+        setPanel(null);
+        setSelectedTask(null);
+        // 我们拦截了这次 pop，需要再 push 一个 state 占位，
+        // 这样下次按返回键还能再次触发 popstate
+        window.history.pushState({ ltdMobilePanel: false }, "");
+        return;
+      }
+      if (view.kind !== "all") {
+        const element = document.querySelector<HTMLElement>(".offline-main .task-scroll");
+        if (element) scrollPositions.current.set(currentKey, element.scrollTop);
+        setView({ kind: "all" });
+        // 在当前 state 下 push 一个新 state，让返回键回到"全部任务"时再退出
+        window.history.pushState({ ltdMobilePanel: false }, "");
+        return;
+      }
+      // 全部任务 + 无 panel → 让系统正常退出，不再拦截
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [view.kind, currentKey]);
 
   const openPanel = useCallback((next: Exclude<Panel, null>) => {
     if (!panelRef.current) {
@@ -347,7 +372,10 @@ export function MobileOfflineApp() {
     panelRef.current = null;
     setPanel(null);
     setSelectedTask(null);
-    if (window.history.state?.ltdMobilePanel) window.history.back();
+    if (window.history.state?.ltdMobilePanel) {
+      skipNextPopRef.current = true;
+      window.history.back();
+    }
   }, []);
 
   const openTask = useCallback(
@@ -374,7 +402,15 @@ export function MobileOfflineApp() {
       panelRef.current = null;
       setPanel(null);
       setSelectedTask(null);
-      if (window.history.state?.ltdMobilePanel) window.history.back();
+      // 如果有 panel push 的 state，跳过它（但不触发 popstate 里的返回逻辑）
+      if (window.history.state?.ltdMobilePanel) {
+        skipNextPopRef.current = true;
+        window.history.back();
+      }
+      // 如果是导航到非 all 视图，需要 pushState 以便返回键能回到 all
+      if (next.kind !== "all") {
+        window.history.pushState({ ltdMobilePanel: false }, "");
+      }
       setView(next);
     },
     [currentKey],
@@ -795,8 +831,7 @@ export function MobileOfflineApp() {
             <>
               <div className="offline-task-tools">
                 <span>{view.kind === "list" ? "包含已完成任务" : " "}</span>
-                <select value={sortBy ?? "default"} onChange={(event) => event.target.value !== "default" && changeSort(event.target.value as Exclude<SortKind, null>)} aria-label="任务排序">
-                  <option value="default">默认排序</option>
+                <select value={sortBy ?? "created"} onChange={(event) => changeSort(event.target.value as Exclude<SortKind, null>)} aria-label="任务排序">
                   <option value="created">按创建时间</option>
                   <option value="due">按到期日期</option>
                   <option value="name">按名称</option>
